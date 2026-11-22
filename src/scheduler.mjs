@@ -65,6 +65,7 @@ function normalizeSlot(raw = {}, index = 0) {
     fromSec,
     toSec,
     windowSec,
+    fullDay: windowSec >= 86400,
     label: raw.label || `时段 ${index + 1}`,
     grid: normalizeGrid(raw.grid),
     library: raw.library || {},
@@ -248,12 +249,15 @@ export class ChannelTimeline {
       if (pool.length === 0) continue;
 
       const g = slot.grid;
-      const fromOffsetSec = mod(slot.fromSec - this.channel.dayStartSec, 86400);
-      const windowMs = slot.windowSec * 1000;
+      const fromOffsetSec = slot.fullDay ? 0 : mod(slot.fromSec - this.channel.dayStartSec, 86400);
+      const windowSec = slot.fullDay ? 86400 : slot.windowSec;
+      const windowMs = windowSec * 1000;
       const slotStartAbs = dayStart + fromOffsetSec * 1000;
       const slotEndAbs = slotStartAbs + windowMs;
-      const rel = mod(g.startSec - slot.fromSec, 86400);
-      const inSlot = rel < slot.windowSec ? rel : 0;
+      // 网格开始时间按「墙上时钟」换算到播出日内偏移；落在时段外就从时段起点开始
+      const startOffsetSec = mod(g.startSec - this.channel.dayStartSec, 86400);
+      const rel = startOffsetSec - fromOffsetSec;
+      const inSlot = rel >= 0 && rel < windowSec ? rel : 0;
       let cursor = slotStartAbs + inSlot * 1000;
 
       const slotsCount = g.perDay * g.cycleDays;

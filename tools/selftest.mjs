@@ -167,6 +167,8 @@ const starts = (plan) => plan.entries.map((e) => localParts(plan.dayStart + e.re
   const plan = dayPlan(tl, '2026-11-24T03:00:00+08:00');
   const p = localParts(plan.dayStart, TZ);
   check(p.hour === 6 && p.minute === 0, '日切 06:00：03:00 属于前一播出日', `${p.hour}:${String(p.minute).padStart(2, '0')}`);
+  const firstP = localParts(plan.dayStart + plan.entries[0].relStart, TZ);
+  check(firstP.hour === 20 && firstP.minute === 0, '日切 06:00 + 全天时段：20:00 起播', `${firstP.hour}:${String(firstP.minute).padStart(2, '0')}`);
 }
 
 /* ------------------------- 定位与待机 ------------------------- */
