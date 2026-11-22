@@ -936,43 +936,7 @@ function renderSegment(ch, seg, index) {
     extras.push(renderSlots(ch, seg));
   }
   if (type === 'grid') {
-    const rule = seg.rule;
-    const num = (key, fallback, min, max) => el('input', {
-      type: 'number', min: String(min), max: String(max), value: rule[key] ?? fallback,
-      oninput: (e) => {
-        rule[key] = Number(e.target.value) || fallback;
-        markDirty('channels');
-      },
-    });
-    extras.push(
-      el('label', {}, '每天开始时间',
-        el('input', {
-          type: 'time', value: rule.start || '20:00',
-          onchange: (e) => { rule.start = e.target.value || '20:00'; markDirty('channels'); },
-        })),
-      el('label', {}, '对齐网格（分钟）',
-        el('select', { onchange: (e) => { rule.slotMinutes = Number(e.target.value); markDirty('channels'); } },
-          [15, 30, 60].map((m) => el('option', { value: String(m), selected: (rule.slotMinutes || 30) === m }, `${m} 分钟`)))),
-      el('label', {}, '每天几部', num('seriesPerDay', 3, 1, 24)),
-      el('label', {}, '每部几集', num('episodesPerSeries', 2, 1, 48)),
-      el('label', {}, '循环周期（天，0=走完整池才回头）', num('cycleDays', 7, 0, 31)),
-      el('label', {}, '片池（每行一部，留空=频道选片）',
-        el('textarea', {
-          rows: 4,
-          value: (rule.series || []).join('\n'),
-          placeholder: '86-不存在的战区\n白箱\n巴克·亚罗',
-          oninput: (e) => {
-            const list = e.target.value.split('\n').map((x) => x.trim()).filter(Boolean);
-            if (list.length) rule.series = list;
-            else delete rule.series;
-            markDirty('channels');
-          },
-        })),
-      el('label', {}, '集数用完后',
-        el('select', { onchange: (e) => { rule.loopEpisodes = e.target.value; markDirty('channels'); } },
-          el('option', { value: 'wrap', selected: (rule.loopEpisodes || 'wrap') === 'wrap' }, '从头循环'),
-          el('option', { value: 'stop', selected: rule.loopEpisodes === 'stop' }, '不再播这一部'))),
-    );
+    extras.push(...gridParamInputs(seg.rule));
   }
   if (type === 'manual') {
     extras.push(
@@ -1092,6 +1056,40 @@ function describeSegment(seg) {
   }
 }
 
+/** 时间网格参数控件（规则段与分时段的子规则共用） */
+function gridParamInputs(rule) {
+  const num = (key, fallback, min, max) =>
+    el('input', {
+      type: 'number', min: String(min), max: String(max), value: rule[key] ?? fallback,
+      oninput: (e) => {
+        rule[key] = Number(e.target.value) || fallback;
+        markDirty('channels');
+      },
+    });
+  return [
+    el('label', {}, '开始时间',
+      el('input', { type: 'time', value: rule.start || '20:00', onchange: (e) => { rule.start = e.target.value || '20:00'; markDirty('channels'); } })),
+    el('label', {}, '对齐网格（分钟）',
+      el('select', { onchange: (e) => { rule.slotMinutes = Number(e.target.value); markDirty('channels'); } },
+        [15, 30, 60].map((m) => el('option', { value: String(m), selected: (rule.slotMinutes || 30) === m }, m + ' 分钟')))),
+    el('label', {}, '每天几部', num('seriesPerDay', 3, 1, 24)),
+    el('label', {}, '每部几集', num('episodesPerSeries', 2, 1, 48)),
+    el('label', {}, '循环周期（天，0=不限）', num('cycleDays', 7, 0, 31)),
+    el('label', {}, '片池（每行一部，留空=频道选片）',
+      el('textarea', {
+        rows: 4,
+        value: (rule.series || []).join('\n'),
+        placeholder: '86-不存在的战区\n白箱\n巴克·亚罗',
+        oninput: (e) => {
+          const list = e.target.value.split('\n').map((x) => x.trim()).filter(Boolean);
+          if (list.length) rule.series = list;
+          else delete rule.series;
+          markDirty('channels');
+        },
+      })),
+  ];
+}
+
 function renderSlots(ch, seg) {
   const wrap = el('div', { style: 'grid-column: 1 / -1' });
   const slots = seg.rule.slots || [];
@@ -1104,8 +1102,8 @@ function renderSlots(ch, seg) {
         el('input', { value: slot.to, placeholder: '06:00', oninput: (e) => { slot.to = e.target.value; markDirty('channels'); } }),
         el(
           'select',
-          { onchange: (e) => { slot.rule = { ...(slot.rule || {}), type: e.target.value }; markDirty('channels'); } },
-          ...Object.entries(RULE_META).map(([k, v]) => el('option', { value: k, selected: (slot.rule?.type || 'shuffle') === k }, v.label)),
+          { onchange: (e) => { slot.rule = { ...(slot.rule || {}), type: e.target.value }; markDirty('channels'); renderChannelEditor(); } },
+          ...Object.entries(RULE_META).filter(([k]) => k !== 'binge').map(([k, v]) => el('option', { value: k, selected: (slot.rule?.type || 'shuffle') === k }, v.label)),
         ),
         el('input', { value: slot.label || '', placeholder: '档位名', oninput: (e) => { slot.label = e.target.value; markDirty('channels'); } }),
         el(
@@ -1122,6 +1120,16 @@ function renderSlots(ch, seg) {
         ),
       ),
     );
+    if ((slot.rule?.type || '') === 'grid') {
+      wrap.append(
+        el(
+          'div',
+          { class: 'slot-params' },
+          el('div', { class: 'seg-params-title' }, `${slot.label || '时段'} · 时间网格参数`),
+          el('div', { class: 'seg-grid' }, ...gridParamInputs(slot.rule)),
+        ),
+      );
+    }
   });
   wrap.append(
     el(

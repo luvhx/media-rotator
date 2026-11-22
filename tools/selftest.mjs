@@ -234,7 +234,8 @@ for (const dayStart of ['00:00', '06:00', '04:30']) {
   // 覆盖满 24 小时
   const last = plan.entries[plan.entries.length - 1];
   const covered = (last.absStart + last.durationMs - plan.dayStart) / 3600_000;
-  check(Math.abs(covered - 24) < 0.05, `日切 ${dayStart}：播出日覆盖 24h`, `${covered.toFixed(2)}h`);
+  // 允许结尾留白（网格规则排不满一天），但不能越过 24h
+  check(covered <= 24.01 && covered >= 22, `日切 ${dayStart}：不越过 24h 且接近排满`, `${covered.toFixed(2)}h`);
 
   // 边界之后（+24h + 1s）必须进入下一个播出日
   const after = tl.resolve(plan.dayStart + 86400000 + 1000);
@@ -326,7 +327,7 @@ for (const dayStart of ['00:00', '06:00', '04:30']) {
     fileId: id + n, season: 1, episode: n, title: 'EP' + n,
     name: id + ' - S01E0' + n + '.mkv', relPath: 'mini/' + id + '/S01E0' + n + '.mkv',
     size: 100, lastModified: 0, subtitle: null, container: 'matroska',
-    durationMs: 24 * MIN, durationSource: 'mkv-info',
+    durationMs: 25 * MIN, durationSource: 'mkv-info',
   });
   const miniLib = new Library({
     version: 1,
@@ -367,6 +368,30 @@ for (const dayStart of ['00:00', '06:00', '04:30']) {
   check(pick(2).join(',') === 'EE1,EE2,BE3,BE4', '周期：播完的 A 被排队的 E 顶替，B 继续第 3、4 集', pick(2).join(','));
   check(pick(3).join(',') === 'FE1,FE2,AE1,AE2', '周期：C 被 F 顶替，D 被重新排队', pick(3).join(','));
   check(pick(4).includes('BE5') && pick(4).includes('BE6'), '周期：长片按周继续，不会重置', pick(4).join(','));
+
+  // 分时段 + 时间网格：网格从整点开始，时段边界截断
+  const dpTl = new ChannelTimeline({
+    channel: { id: 'dp-grid', name: 'dp', mode: 'daily', anchor: '2026-11-23T00:00:00+08:00',
+      program: [{ fill: true, rule: { type: 'daypart', slots: [
+        { from: '00:00', to: '02:00', label: '白天', rule: { type: 'shuffle' } },
+        { from: '20:00', to: '24:00', label: '黄金档', rule: { type: 'grid', start: '20:00', slotMinutes: 30, seriesPerDay: 2, episodesPerSeries: 2, series: ['A', 'B', 'C', 'D'] } },
+      ] } }] },
+    library: rosterLib,
+    tz: TZ,
+  });
+  const dpPlan = dpTl.dayPlan(dpTl.dayIndexOf(at('2026-11-23T12:00:00+08:00')));
+  const gridEntries = dpPlan.entries.filter((e) => e.segmentLabel === '黄金档');
+  const firstGrid = gridEntries[0];
+  const p0 = localParts(firstGrid.absStart, TZ);
+  check(p0.hour === 20 && p0.minute === 0, '分时段+网格：首档正好 20:00', `${p0.hour}:${String(p0.minute).padStart(2, '0')}`);
+  check(gridEntries.every((e) => { const p = localParts(e.absStart, TZ); return p.minute === 0 || p.minute === 30; }), '分时段+网格：对齐半点');
+  check(gridEntries.length === 4, '分时段+网格：2 部 × 2 集', gridEntries.length + ' 条');
+
+  // 时段边界：白天最后一个节目必须截断到 18:00
+  const beforeGrid = dpPlan.entries.filter((e) => e.segmentLabel === '白天').pop();
+  const endOfDay = beforeGrid.absStart + beforeGrid.durationMs;
+  const pEnd = localParts(endOfDay, TZ);
+  check(pEnd.hour === 2 && pEnd.minute === 0 && beforeGrid.truncated, '分时段：节目在时段边界被截断', `${pEnd.hour}:${String(pEnd.minute).padStart(2, '0')}`);
 
   const miniPlan = miniTl.dayPlan(miniTl.dayIndexOf(at('2026-11-23T12:00:00+08:00')));
   const miniIds = miniPlan.entries.map((e) => e.episode.fileId);

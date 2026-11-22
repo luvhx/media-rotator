@@ -232,32 +232,74 @@ function makeDaypart(rule, ctx) {
         makeRule(slots[i].rule || { type: 'sequential' }, {
           ...ctx,
           seedPrefix: `${ctx.seedPrefix}:slot${i}`,
+          slot: { fromSec: slots[i].fromSec, toSec: slots[i].toSec, index: i },
         }),
       );
     }
     return engines.get(i);
   };
+  const secOf = (ms) => {
+    const p = localParts(ms, ctx.tz);
+    return p.hour * 3600 + p.minute * 60 + p.second;
+  };
+
+  /** 当前时刻落在哪个时段；落在时段之间的空档返回 -1 */
   const pickSlot = (cursorMs) => {
-    const p = localParts(cursorMs, ctx.tz);
-    const sec = p.hour * 3600 + p.minute * 60 + p.second;
-    // 支持跨零点区间（from > to）
+    const sec = secOf(cursorMs);
     for (let i = 0; i < slots.length; i++) {
       const s = slots[i];
       if (s.fromSec <= s.toSec) {
         if (sec >= s.fromSec && sec < s.toSec) return i;
       } else if (sec >= s.fromSec || sec < s.toSec) return i;
     }
-    // 落在空档：取最近一个已开始的时段
-    let best = -1;
-    for (let i = 0; i < slots.length; i++) if (slots[i].fromSec <= sec) best = i;
-    return best >= 0 ? best : slots.length - 1;
+    return -1;
   };
+
+  /** 距离下一个时段开始还有多久（空档里跳过） */
+  const msToNextSlot = (cursorMs) => {
+    const sec = secOf(cursorMs);
+    let best = 86400;
+    for (const s of slots) {
+      let d = s.fromSec - sec;
+      if (d <= 0) d += 86400;
+      if (d < best) best = d;
+    }
+    return best * 1000;
+  };
+  /** 距离当前时段结束还有多久 */
+  const msToSlotEnd = (cursorMs, slot) => {
+    const p = localParts(cursorMs, ctx.tz);
+    const sec = p.hour * 3600 + p.minute * 60 + p.second;
+    let delta = slot.toSec - sec;
+    if (delta <= 0) delta += 86400;
+    return delta * 1000;
+  };
+
   return {
     endless: true,
     next(cursorMs) {
       const i = pickSlot(cursorMs);
+      if (i < 0) {
+        // 时段之间的空档：留空到下一个时段开始
+        const gap = msToNextSlot(cursorMs);
+        return gap > 0 ? { gapMs: gap } : null;
+      }
       const ep = engineFor(i).next(cursorMs);
-      if (ep && slots[i].label) return { ...ep, __segmentLabel: slots[i].label };
+      if (!ep) {
+        // 该时段的规则播完了：留空到时段结束，让下一个时段接手
+        const gap = msToSlotEnd(cursorMs, slots[i]);
+        return gap > 0 ? { gapMs: gap } : null;
+      }
+      // 节目活不过时段末尾：截断（电视台到点就切）
+      if (typeof ep.durationMs === 'number' && !ep.gapMs) {
+        const left = msToSlotEnd(cursorMs, slots[i]);
+        if (left > 0 && ep.durationMs > left) {
+          const cut = { ...ep, durationMs: left, __truncated: true };
+          if (slots[i].label) cut.__segmentLabel = slots[i].label;
+          return cut;
+        }
+      }
+      if (slots[i].label) return { ...ep, __segmentLabel: slots[i].label };
       return ep;
     },
   };
@@ -309,19 +351,27 @@ function makeGrid(rule, ctx) {
 
   const dayStartSec = Number(ctx.dayStartSec) || 0;
   // start 按「墙上时钟」解释，换算成相对播出日起点的偏移
-  const offsetSec = (((startSec - dayStartSec) % 86400) + 86400) % 86400;
+  let offsetSec = (((startSec - dayStartSec) % 86400) + 86400) % 86400;
+  // 计划内游标：独立使用时相对播出日，嵌在「分时段」时相对时段起点
+  let t = offsetSec * 1000;
+  let windowMs = null;
+  if (ctx.slot) {
+    let win = ctx.slot.toSec - ctx.slot.fromSec;
+    if (win <= 0) win += 86400;
+    windowMs = win * 1000;
+    const rel = (((startSec - ctx.slot.fromSec) % 86400) + 86400) % 86400;
+    const inSlot = rel < win ? rel : 0; // start 不在时段内就从时段起点开始
+    offsetSec = (((ctx.slot.fromSec - dayStartSec + inSlot) % 86400) + 86400) % 86400;
+    t = inSlot * 1000;
+  }
   // 轮换以频道锚点当天为第 0 天，保证锚点当天从片池第一部、第一集开始
   const anchorDay = localDayIndex(Number(ctx.channel.anchorMs) || 0, ctx.tz);
   const day = (Number(ctx.dayIndex) || 0) - anchorDay;
   const dayStartMs = Number(ctx.dayStartMs) || 0;
 
   const plan = [];
-  let t = 0; // 相对播出日起点（毫秒）
-
-  if (offsetSec > 0) {
-    plan.push({ gapMs: offsetSec * 1000 });
-    t = offsetSec * 1000;
-  }
+  const targetStartAbs = dayStartMs + offsetSec * 1000; // 首档的绝对开始时间
+  let firstPull = true;
 
   // 循环周期（天）：片池大于「每天部数 × 周期天数」时启用
   //   固定名单 = 每天部数 × 周期天数 个位置；多出来的影片排队
@@ -416,6 +466,7 @@ function makeGrid(rule, ctx) {
     }
 
     for (const ep of picked) {
+      if (windowMs !== null && t + ep.durationMs > windowMs) break; // 放不下就留空到时段结束
       plan.push({ ep });
       const endMs = dayStartMs + t + ep.durationMs;
       // 向上对齐到网格端点（epoch 对齐，整点/半点在时区里同样成立）
@@ -432,7 +483,14 @@ function makeGrid(rule, ctx) {
   let i = 0;
   return {
     endless: false,
-    next() {
+    noRestart: true, // 日计划：播完就留白，不要重来
+    next(cursorMs) {
+      // 首档对齐到绝对时刻（20:00 就是 20:00，不受前一个时段结束时刻影响）
+      if (firstPull) {
+        firstPull = false;
+        const gap = targetStartAbs - (Number(cursorMs) || targetStartAbs);
+        if (gap > 1000) return { gapMs: gap };
+      }
       while (i < plan.length) {
         const item = plan[i++];
         if (item.gapMs) return { gapMs: item.gapMs };
@@ -566,7 +624,7 @@ export class ChannelTimeline {
           let ep = u.engine.next(startMs + cursor);
           if (!ep) {
             // 规则播完一轮：fill 段（按日编排）或显式 loop 段换新种子重来
-            const canRestart = u.seg.loop || u.target.kind === 'fill';
+            const canRestart = (u.seg.loop || u.target.kind === 'fill') && !u.engine.noRestart;
             if (canRestart && u.restarts < 12) {
               u.restarts++;
               u.engine = makeRule(u.seg.rule, { ...u.ctx, seedPrefix: `${u.ctx.seedPrefix}#r${u.restarts}` });
@@ -587,6 +645,7 @@ export class ChannelTimeline {
             episode: ep,
             relStart: cursor,
             durationMs: ep.durationMs,
+            truncated: Boolean(ep.__truncated),
             segmentIndex: u.segIndex,
             segmentLabel: ep.__segmentLabel || u.label,
           });
@@ -641,7 +700,7 @@ export class ChannelTimeline {
         ...e,
         absStart: start + e.relStart,
         durationMs: dur,
-        truncated: dur < e.durationMs,
+        truncated: Boolean(e.truncated) || dur < e.durationMs,
       });
     }
     const last = out[out.length - 1];
@@ -706,6 +765,10 @@ export class ChannelTimeline {
         for (const e of plan.entries) {
           const ends = e.absStart + e.durationMs;
           if (ends <= fromMs) continue;
+          if (e.absStart >= toMs) {
+            pushGap(cursor, toMs);
+            return out;
+          }
           if (e.absStart > cursor) pushGap(cursor, e.absStart);
           if (out.length >= limit) break;
           out.push(toProgramItem(e, e.absStart, e.durationMs, e.truncated));

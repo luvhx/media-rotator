@@ -296,6 +296,27 @@ if (typeSel) {
   const sum = q('channelEditor').querySelector('.seg-summary');
   const text = sum ? sum.textContent : '';
   check(text.includes('每天') && text.includes('对齐'), '时间网格：摘要可读', text.slice(0, 46));
+
+  // 分时段 + 时间网格：子规则参数区（注意桩不支持后代选择器，逐层取）
+  const segBox2 = q('channelEditor').querySelector('.seg');
+  const typeSel2 = segBox2 ? segBox2.querySelector('select') : null;
+  if (typeSel2) {
+    typeSel2.value = 'daypart';
+    typeSel2.dispatch('change');
+    await wait(300);
+    const rows = q('channelEditor').querySelectorAll('.slot-row');
+    check(rows.length > 0, '分时段：时段行渲染', rows.length + ' 行');
+    const slotSel = rows[0] ? rows[0].querySelector('select') : null;
+    if (slotSel) {
+      slotSel.value = 'grid';
+      slotSel.dispatch('change');
+      await wait(300);
+      const slotParams = q('channelEditor').querySelector('.slot-params');
+      check(Boolean(slotParams), '分时段：子规则选时间网格后出现参数区');
+      const inputs = slotParams ? slotParams.querySelectorAll('input').length + slotParams.querySelectorAll('select').length + slotParams.querySelectorAll('textarea').length : 0;
+      check(inputs >= 5, '分时段：时间网格参数齐全', inputs + ' 个控件');
+    }
+  }
 }
 
 // 切到预览
