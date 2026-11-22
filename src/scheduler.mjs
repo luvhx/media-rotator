@@ -1,46 +1,103 @@
 /**
- * 编排引擎
+ * 编排引擎（v3：只有「时间网格」一种模式）
  * ------------------------------------------------------------------
- * 概念：
- *   channel   一个频道（一条播出时间轴）
- *   program   编排规则列表，每段 (segment) 用一条规则生成一段节目
- *   entry     时间轴上的一个节目项（= 一个视频文件 + 时长 + 绝对起止时间）
+ * 一个频道 = 一张按「整点 / 半点」对齐的节目表：
  *
- * 时间轴有两种模式：
- *   loop   固定循环：从 anchor 起把 program 展开成一个「循环」，之后无限重复。
- *          位置 = (now - anchor) mod cycleLen，O(1) 定位，与时刻无关。
- *   daily  按自然日编排：每天 00:00 重新开始，program 填满 24 小时，跨零点节目被截断。
- *          适合「黄金档 / 深夜档」这类与墙上时钟绑定的规则。
+ *   - 每天从 grid.start 开始，取 grid.perDay 部，每部 grid.episodes 集
+ *   - 每集占用 ceil(时长 / slotMinutes) 个网格，剩余时间留空
+ *   - grid.cycleDays > 0 时，每天部数 × 周期天数 = 固定名单；
+ *     片池超出的影片排队，某个位置上的影片播完后由队列补位
+ *   - 播出日由 channel.dayStart 决定（默认 00:00；设 06:00 就是 06:00 → 次日 06:00）
  *
- * 所有「随机」都使用确定性 PRNG：同一频道 + 同一天/同一循环永远得到同一编排。
+ * 所有「随机」都使用确定性 PRNG，同一频道 + 同一天永远得到同一编排。
  */
 
-import {
-  rng,
-  hash32,
-  shuffleInPlace,
-  localDayIndex,
-  dayStartMs,
-  localParts,
-  parseClock,
-  fmtDuration,
-} from './util.mjs';
+import { localDayIndex, dayStartMs, parseClock } from './util.mjs';
 
 const DAY_MS = 86400000;
-const DEFAULT_SEGMENT_COUNT = 12;
 
 /* ------------------------------------------------------------------ *
- * 规则工厂
+ * 频道归一化
  * ------------------------------------------------------------------ */
 
-function seriesOfEarly(library, channel, tmdbIndex = null) {
+const DEFAULT_ANCHOR = '2024-01-01T00:00:00+08:00';
+
+function clamp(n, min, max, fallback) {
+  const v = Number(n);
+  if (!Number.isFinite(v)) return fallback;
+  return Math.min(max, Math.max(min, Math.round(v)));
+}
+
+function mod(n, m) {
+  return ((n % m) + m) % m;
+}
+
+/**
+ * 把旧版（program + rule）配置迁移成网格参数，保证升级后频道还能播。
+ * 只取第一个 grid 规则；没有就套用默认值。
+ */
+function gridFromLegacy(program) {
+  const seg = (program || []).find((s) => s?.rule?.type === 'grid');
+  const rule = seg?.rule || {};
+  return {
+    start: rule.start || '20:00',
+    slotMinutes: rule.slotMinutes || 30,
+    perDay: rule.seriesPerDay || 3,
+    episodes: rule.episodesPerSeries || 2,
+    cycleDays: rule.cycleDays ?? 7,
+    loopEpisodes: rule.loopEpisodes === 'stop' ? 'stop' : 'wrap',
+    pool: Array.isArray(rule.series) ? rule.series : undefined,
+  };
+}
+
+export function normalizeChannel(def, tz = 'Asia/Shanghai') {
+  if (!def || !def.id) throw new Error('频道定义缺少 id');
+  const legacy = def.program || def.rules || [];
+  const rawGrid = def.grid && typeof def.grid === 'object' ? def.grid : gridFromLegacy(legacy);
+  const startSec = parseClock(rawGrid.start || '20:00');
+  const dayStart = def.dayStart || '00:00';
+
+  const ch = {
+    id: String(def.id),
+    name: def.name || def.id,
+    description: def.description || '',
+    dayStart,
+    dayStartSec: parseClock(dayStart),
+    anchorMs:
+      def.anchorMs != null && Number.isFinite(Number(def.anchorMs))
+        ? Number(def.anchorMs)
+        : def.anchor
+          ? Date.parse(def.anchor)
+          : Date.parse(DEFAULT_ANCHOR),
+    seed: def.seed ?? def.id,
+    library: def.library || {},
+    weights: def.weights || null,
+    grid: {
+      start: rawGrid.start || '20:00',
+      startSec,
+      slotMinutes: clamp(rawGrid.slotMinutes ?? 30, 5, 180, 30),
+      perDay: clamp(rawGrid.perDay ?? 3, 1, 48, 3),
+      episodes: clamp(rawGrid.episodes ?? 2, 1, 48, 2),
+      cycleDays: clamp(rawGrid.cycleDays ?? 7, 0, 31, 7),
+      loopEpisodes: rawGrid.loopEpisodes === 'stop' ? 'stop' : 'wrap',
+      pool: Array.isArray(rawGrid.pool) && rawGrid.pool.length > 0 ? rawGrid.pool.map(String) : null,
+    },
+  };
+  if (Number.isNaN(ch.anchorMs)) throw new Error(`频道 ${ch.id} 的 anchor 时间无法解析`);
+  return ch;
+}
+
+/* ------------------------------------------------------------------ *
+ * 选片
+ * ------------------------------------------------------------------ */
+
+function seriesOfEarly(library, channel, tmdbIndex) {
   const filter = channel.library || {};
-  let list = library.series.slice();
+  let list = library.series;
   if (Array.isArray(filter.series) && filter.series.length > 0) {
     const picked = [];
     for (const sel of filter.series) picked.push(...library.resolve(sel));
-    const uniq = new Map(picked.map((s) => [s.id, s]));
-    list = [...uniq.values()];
+    list = [...new Map(picked.map((s) => [s.id, s])).values()];
   }
   if (Array.isArray(filter.exclude) && filter.exclude.length > 0) {
     const drop = new Set();
@@ -48,478 +105,8 @@ function seriesOfEarly(library, channel, tmdbIndex = null) {
     list = list.filter((s) => !drop.has(s.id));
   }
   if (filter.minEpisodes) list = list.filter((s) => s.episodes.length >= filter.minEpisodes);
-  // 按 TMDB 元数据选片（年份/评分/类型）
   if (filter.tmdb && tmdbIndex) list = tmdbIndex.filterSeries(list, filter.tmdb);
-  list = list.filter((s) => s.episodes.length > 0);
-  return list;
-}
-
-function selectSeries(rule, ctx) {
-  const base = ctx.series;
-  if (!rule.series) return base.slice();
-  const wanted = Array.isArray(rule.series) ? rule.series : [rule.series];
-  const out = [];
-  for (const sel of wanted) {
-    const hits = ctx.library.resolve(sel);
-    for (const s of hits) if (base.some((b) => b.id === s.id)) out.push(s);
-  }
-  return out;
-}
-
-function weightOf(ctx, series) {
-  const w = ctx.channel.weights;
-  if (!w) return 1;
-  const v = w[series.displayName] ?? w[series.name] ?? w[series.id];
-  return typeof v === 'number' && v > 0 ? v : 1;
-}
-
-/** 顺序：每部播完再下一部（binge 的行为）；order=shuffle 时先打散系列 */
-function makeSequential(rule, ctx) {
-  const order = rule.order || 'config';
-  let list = selectSeries(rule, ctx);
-  if (order === 'shuffle') list = shuffleInPlace(list.slice(), rng(hash32(ctx.seedPrefix + ':series')));
-  if (order === 'name') list = list.slice().sort((a, b) => a.displayName.localeCompare(b.displayName, 'zh-Hans-CN'));
-  if (rule.shuffleEpisodes) {
-    let si = 0;
-    let cur = null;
-    let curIdx = 0;
-    return {
-      endless: false,
-      next() {
-        while (si < list.length) {
-          if (!cur) {
-            cur = shuffleInPlace(
-              ctx.library.episodesOf(list[si].id).slice(),
-              rng(hash32(`${ctx.seedPrefix}:ep:${list[si].id}`)),
-            );
-            curIdx = 0;
-            si++;
-          }
-          if (curIdx < cur.length) return cur[curIdx++];
-          cur = null;
-        }
-        return null;
-      },
-    };
-  }
-  let si = 0;
-  let ei = 0;
-  return {
-    endless: false,
-    next() {
-      while (si < list.length) {
-        const eps = ctx.library.episodesOf(list[si].id);
-        if (ei < eps.length) return eps[ei++];
-        si++;
-        ei = 0;
-      }
-      return null;
-    },
-  };
-}
-
-/** 轮播：每个系列轮流各出一集（A 第1集 → B 第1集 → C 第1集 → A 第2集 …） */
-function makeInterleave(rule, ctx) {
-  const list = selectSeries(rule, ctx);
-  let round = 0;
-  let pos = 0;
-  return {
-    endless: false,
-    next() {
-      if (list.length === 0) return null;
-      let guard = 0;
-      while (guard++ <= list.length + 1) {
-        if (pos >= list.length) {
-          pos = 0;
-          round++;
-        }
-        const eps = ctx.library.episodesOf(list[pos].id);
-        if (round >= eps.length) {
-          // 该系列本季已播完，看这一轮还有没有别的系列可播
-          const anyLeft = list.some((s) => ctx.library.episodesOf(s.id).length > round);
-          if (!anyLeft) return null;
-          pos++;
-          continue;
-        }
-        const ep = eps[round];
-        pos++;
-        return ep;
-      }
-      return null;
-    },
-  };
-}
-
-/** 随机：整库（或指定系列）全集打散，播完一轮即结束（由编排引擎决定是否重来） */
-function makeShuffle(rule, ctx) {
-  const pool = selectSeries(rule, ctx).flatMap((s) => ctx.library.episodesOf(s.id));
-  const random = rng(hash32(`${ctx.seedPrefix}:shuffle`));
-  const deck = shuffleInPlace(pool.slice(), random);
-  let cursor = 0;
-  return {
-    endless: false,
-    next() {
-      if (pool.length === 0) return null;
-      if (cursor >= deck.length) return null;
-      return deck[cursor++];
-    },
-  };
-}
-
-/** 加权随机：系列权重 × 集，可无限抽取 */
-function makeWeighted(rule, ctx) {
-  const list = selectSeries(rule, ctx);
-  const weights = list.map((s) => weightOf(ctx, s));
-  const total = weights.reduce((a, b) => a + b, 0);
-  const random = rng(hash32(`${ctx.seedPrefix}:weighted`));
-  const pickSeries = () => {
-    let x = random() * total;
-    for (let i = 0; i < list.length; i++) {
-      x -= weights[i];
-      if (x <= 0) return list[i];
-    }
-    return list[list.length - 1];
-  };
-  return {
-    endless: true,
-    next() {
-      if (list.length === 0) return null;
-      const s = pickSeries();
-      const eps = ctx.library.episodesOf(s.id);
-      if (eps.length === 0) return null;
-      return eps[Math.floor(random() * eps.length)];
-    },
-  };
-}
-
-/** 日切：每天（本地日）换一部系列，集序当天随机 */
-function makeDaily(rule, ctx) {
-  const list = selectSeries(rule, ctx);
-  const random = rng(hash32(`${ctx.seedPrefix}:daily`));
-  let curDay = -1;
-  let deck = [];
-  let idx = 0;
-  return {
-    endless: true,
-    next(cursorMs) {
-      if (list.length === 0) return null;
-      const day = localDayIndex(cursorMs, ctx.tz);
-      if (day !== curDay) {
-        curDay = day;
-        const dayRng = rng(hash32(`${ctx.seedPrefix}:day:${day}`));
-        const series = list[Math.floor(dayRng() * list.length)];
-        deck = shuffleInPlace(ctx.library.episodesOf(series.id).slice(), dayRng);
-        idx = 0;
-      }
-      if (deck.length === 0) return null;
-      if (idx >= deck.length) deck = shuffleInPlace(deck.slice(), random), (idx = 0);
-      return deck[idx++];
-    },
-  };
-}
-
-/** 时段：按「当前节目起始时刻」的墙上时间选择子规则 */
-function makeDaypart(rule, ctx) {
-  const slots = (rule.slots || [])
-    .map((s) => ({ ...s, fromSec: parseClock(s.from), toSec: parseClock(s.to) }))
-    .sort((a, b) => a.fromSec - b.fromSec);
-  if (slots.length === 0) throw new Error('daypart 规则需要至少一个 slots 项');
-  const engines = new Map();
-  const engineFor = (i) => {
-    if (!engines.has(i)) {
-      engines.set(
-        i,
-        makeRule(slots[i].rule || { type: 'sequential' }, {
-          ...ctx,
-          seedPrefix: `${ctx.seedPrefix}:slot${i}`,
-          slot: { fromSec: slots[i].fromSec, toSec: slots[i].toSec, index: i },
-        }),
-      );
-    }
-    return engines.get(i);
-  };
-  const secOf = (ms) => {
-    const p = localParts(ms, ctx.tz);
-    return p.hour * 3600 + p.minute * 60 + p.second;
-  };
-
-  /** 当前时刻落在哪个时段；落在时段之间的空档返回 -1 */
-  const pickSlot = (cursorMs) => {
-    const sec = secOf(cursorMs);
-    for (let i = 0; i < slots.length; i++) {
-      const s = slots[i];
-      if (s.fromSec <= s.toSec) {
-        if (sec >= s.fromSec && sec < s.toSec) return i;
-      } else if (sec >= s.fromSec || sec < s.toSec) return i;
-    }
-    return -1;
-  };
-
-  /** 距离下一个时段开始还有多久（空档里跳过） */
-  const msToNextSlot = (cursorMs) => {
-    const sec = secOf(cursorMs);
-    let best = 86400;
-    for (const s of slots) {
-      let d = s.fromSec - sec;
-      if (d <= 0) d += 86400;
-      if (d < best) best = d;
-    }
-    return best * 1000;
-  };
-  /** 距离当前时段结束还有多久 */
-  const msToSlotEnd = (cursorMs, slot) => {
-    const p = localParts(cursorMs, ctx.tz);
-    const sec = p.hour * 3600 + p.minute * 60 + p.second;
-    let delta = slot.toSec - sec;
-    if (delta <= 0) delta += 86400;
-    return delta * 1000;
-  };
-
-  return {
-    endless: true,
-    next(cursorMs) {
-      const i = pickSlot(cursorMs);
-      if (i < 0) {
-        // 时段之间的空档：留空到下一个时段开始
-        const gap = msToNextSlot(cursorMs);
-        return gap > 0 ? { gapMs: gap } : null;
-      }
-      const ep = engineFor(i).next(cursorMs);
-      if (!ep) {
-        // 该时段的规则播完了：留空到时段结束，让下一个时段接手
-        const gap = msToSlotEnd(cursorMs, slots[i]);
-        return gap > 0 ? { gapMs: gap } : null;
-      }
-      // 节目活不过时段末尾：截断（电视台到点就切）
-      if (typeof ep.durationMs === 'number' && !ep.gapMs) {
-        const left = msToSlotEnd(cursorMs, slots[i]);
-        if (left > 0 && ep.durationMs > left) {
-          const cut = { ...ep, durationMs: left, __truncated: true };
-          if (slots[i].label) cut.__segmentLabel = slots[i].label;
-          return cut;
-        }
-      }
-      if (slots[i].label) return { ...ep, __segmentLabel: slots[i].label };
-      return ep;
-    },
-  };
-}
-
-/** 手动：显式节目单 */
-function makeManual(rule, ctx) {
-  const items = (rule.items || []).map((it) => {
-    if (it.fileId) return ctx.library.getEpisode(it.fileId);
-    if (it.episode) {
-      const series = ctx.library.resolve(it.series)[0];
-      if (!series) return null;
-      return ctx.library.episodesOf(series.id).find((e) => e.season === (it.season || 1) && e.episode === it.episode) || null;
-    }
-    return null;
-  });
-  const list = items.filter(Boolean);
-  let i = 0;
-  return {
-    endless: false,
-    next() {
-      if (i >= list.length) return null;
-      return list[i++];
-    },
-  };
-}
-
-/**
- * 时间网格（grid）
- * ------------------------------------------------------------------
- * 按「整点 / 半点」对齐排片，节目之间留空。
- *
- *   { "type": "grid", "start": "20:00", "slotMinutes": 30,
- *     "seriesPerDay": 3, "episodesPerSeries": 2 }
- *
- * 规则：
- *   - 每天从 start 开始，取 seriesPerDay 部（按天轮换片池），每部 episodesPerSeries 集
- *   - 每集占用 ceil(时长 / slotMinutes) 个网格；多余的时间留空
- *   - 下一集从下一个网格点开始（时长不足一个网格也不会提前开始）
- *   - 片池按 seriesPerDay 步长逐日推进：池子 6 部、每天 3 部 → 周一 A/B/C、周二 D/E/F、周三 A/B/C…
- */
-function makeGrid(rule, ctx) {
-  const slotMs = Math.max(5, Math.min(180, Number(rule.slotMinutes) || 30)) * 60000;
-  const startSec = parseClock(rule.start || '20:00');
-  const perDay = Math.max(1, Math.min(24, Number(rule.seriesPerDay) || 3));
-  const perSeries = Math.max(1, Math.min(48, Number(rule.episodesPerSeries) || 2));
-  const pool = selectSeries(rule, ctx);
-  if (pool.length === 0) throw new Error('grid 规则：片池为空，请检查 series 或频道的选片条件');
-
-  const dayStartSec = Number(ctx.dayStartSec) || 0;
-  // start 按「墙上时钟」解释，换算成相对播出日起点的偏移
-  let offsetSec = (((startSec - dayStartSec) % 86400) + 86400) % 86400;
-  // 计划内游标：独立使用时相对播出日，嵌在「分时段」时相对时段起点
-  let t = offsetSec * 1000;
-  let windowMs = null;
-  if (ctx.slot) {
-    let win = ctx.slot.toSec - ctx.slot.fromSec;
-    if (win <= 0) win += 86400;
-    windowMs = win * 1000;
-    const rel = (((startSec - ctx.slot.fromSec) % 86400) + 86400) % 86400;
-    const inSlot = rel < win ? rel : 0; // start 不在时段内就从时段起点开始
-    offsetSec = (((ctx.slot.fromSec - dayStartSec + inSlot) % 86400) + 86400) % 86400;
-    t = inSlot * 1000;
-  }
-  // 轮换以频道锚点当天为第 0 天，保证锚点当天从片池第一部、第一集开始
-  const anchorDay = localDayIndex(Number(ctx.channel.anchorMs) || 0, ctx.tz);
-  const day = (Number(ctx.dayIndex) || 0) - anchorDay;
-  const dayStartMs = Number(ctx.dayStartMs) || 0;
-
-  const plan = [];
-  const targetStartAbs = dayStartMs + offsetSec * 1000; // 首档的绝对开始时间
-  let firstPull = true;
-
-  // 循环周期（天）：片池大于「每天部数 × 周期天数」时启用
-  //   固定名单 = 每天部数 × 周期天数 个位置；多出来的影片排队
-  //   某个位置上的影片播完最后一集后，队列里的下一部补上，从第 1 集开始
-  const cycleDays = Math.max(0, Math.min(31, Number(rule.cycleDays) || 0));
-  const slots = perDay * cycleDays;
-  const useRoster = cycleDays > 0 && slots > 0 && pool.length > slots;
-
-  const episodesOfCache = new Map();
-  const epsOf = (id) => {
-    if (!episodesOfCache.has(id)) episodesOfCache.set(id, ctx.library.episodesOf(id) || []);
-    return episodesOfCache.get(id);
-  };
-  const runCycles = (series) => Math.max(1, Math.ceil(epsOf(series.id).length / perSeries));
-
-  let roster = null;
-  if (useRoster) {
-    const cache = ctx.gridCache.get(ctx.cacheKey) || { rows: [], queue: pool.slice(slots), qpos: 0 };
-    ctx.gridCache.set(ctx.cacheKey, cache);
-
-    const dequeue = (inRoster) => {
-      let guard = 0;
-      while (guard++ < pool.length * 3) {
-        if (cache.qpos >= cache.queue.length) {
-          cache.queue = pool.slice(); // 队列用完，从片池重新排一轮
-          cache.qpos = 0;
-        }
-        const s = cache.queue[cache.qpos++];
-        if (!inRoster.has(s.id)) return s;
-      }
-      return null;
-    };
-
-    roster = (c) => {
-      while (cache.rows.length <= c) {
-        const cur = cache.rows.length;
-        if (cur === 0) {
-          cache.rows.push(pool.slice(0, slots).map((series) => ({ series, start: 0, airing: 0 })));
-          continue;
-        }
-        const prev = cache.rows[cur - 1];
-        const inRoster = new Set(prev.map((x) => x.series.id));
-        const row = prev.map((seat) => {
-          if (cur - seat.start < runCycles(seat.series)) return { ...seat, airing: cur - seat.start };
-          const next = dequeue(inRoster);
-          if (!next) return { ...seat, airing: cur - seat.start };
-          inRoster.delete(seat.series.id);
-          inRoster.add(next.id);
-          return { series: next, start: cur, airing: 0 };
-        });
-        cache.rows.push(row);
-      }
-      return cache.rows[c];
-    };
-  }
-
-  const cycleDay = useRoster ? ((day % cycleDays) + cycleDays) % cycleDays : 0;
-  const cycleIndex = useRoster ? Math.floor(day / cycleDays) : 0;
-
-  for (let j = 0; j < perDay; j++) {
-    let series;
-    let occurrence;
-    if (useRoster) {
-      const seat = roster(Math.max(0, cycleIndex))[cycleDay * perDay + j];
-      series = seat.series;
-      occurrence = seat.airing;
-    } else {
-      const slotIdx = ((day * perDay + j) % pool.length + pool.length) % pool.length;
-      series = pool[slotIdx];
-      occurrence = Math.floor((day * perDay + j) / pool.length);
-    }
-    const all = epsOf(series.id);
-    if (!all || all.length === 0) continue;
-
-    // 锚点之前的日期 occurrence 会是负数：按周期折算回来，避免取到 undefined
-    const totalOccurrences = Math.max(1, Math.ceil(all.length / perSeries));
-    const cycle = rule.loopEpisodes === 'stop' ? Math.max(0, occurrence) : ((occurrence % totalOccurrences) + totalOccurrences) % totalOccurrences;
-
-    const picked = [];
-    const usedThisRun = new Set();
-    for (let k = 0; k < perSeries; k++) {
-      let idx = cycle * perSeries + k;
-      if (idx < 0) continue;
-      if (idx >= all.length) {
-        if (rule.loopEpisodes === 'stop') break;
-        idx %= all.length;
-      }
-      // 同一档里不重复播同一集（集数不够 perSeries 时，跳过剩余的格）
-      if (usedThisRun.has(idx)) break;
-      usedThisRun.add(idx);
-      picked.push(all[idx]);
-    }
-
-    for (const ep of picked) {
-      if (windowMs !== null && t + ep.durationMs > windowMs) break; // 放不下就留空到时段结束
-      plan.push({ ep });
-      const endMs = dayStartMs + t + ep.durationMs;
-      // 向上对齐到网格端点（epoch 对齐，整点/半点在时区里同样成立）
-      const slotEnd = Math.ceil(endMs / slotMs) * slotMs;
-      const gap = Math.max(0, slotEnd - endMs);
-      t += ep.durationMs;
-      if (gap > 0) {
-        plan.push({ gapMs: gap });
-        t += gap;
-      }
-    }
-  }
-
-  let i = 0;
-  return {
-    endless: false,
-    noRestart: true, // 日计划：播完就留白，不要重来
-    next(cursorMs) {
-      // 首档对齐到绝对时刻（20:00 就是 20:00，不受前一个时段结束时刻影响）
-      if (firstPull) {
-        firstPull = false;
-        const gap = targetStartAbs - (Number(cursorMs) || targetStartAbs);
-        if (gap > 1000) return { gapMs: gap };
-      }
-      while (i < plan.length) {
-        const item = plan[i++];
-        if (item.gapMs) return { gapMs: item.gapMs };
-        return item.ep;
-      }
-      return null;
-    },
-  };
-}
-
-const RULE_FACTORIES = {
-  sequential: makeSequential,
-  binge: makeSequential,
-  interleave: makeInterleave,
-  shuffle: makeShuffle,
-  weighted: makeWeighted,
-  daily: makeDaily,
-  daypart: makeDaypart,
-  manual: makeManual,
-  grid: makeGrid,
-};
-
-export const RULE_TYPES = Object.keys(RULE_FACTORIES);
-
-function makeRule(rule, ctx) {
-  const type = rule?.type || 'sequential';
-  const factory = RULE_FACTORIES[type];
-  if (!factory) throw new Error(`未知的编排规则类型："${type}"（可用：${RULE_TYPES.join(', ')}）`);
-  return factory({ ...rule, type }, ctx);
+  return list.filter((s) => s.episodes.length > 0);
 }
 
 /* ------------------------------------------------------------------ *
@@ -527,360 +114,278 @@ function makeRule(rule, ctx) {
  * ------------------------------------------------------------------ */
 
 export class ChannelTimeline {
-  /**
-   * @param {object} opts
-   * @param {object} opts.channel  频道定义
-   * @param {import('./library.mjs').Library} opts.library
-   * @param {string} opts.tz
-   */
   constructor({ channel, library, tz = 'Asia/Shanghai', tmdbIndex = null }) {
-    this.channel = normalizeChannel(channel);
+    this.channel = normalizeChannel(channel, tz);
     this.library = library;
     this.tz = tz;
-    this.mode = this.channel.mode;
-    // 日编排的「日切时间」（秒）：默认 00:00；设成 06:00 就是一个 06:00 → 次日 06:00 的播出日
     this.dayOffsetMs = (this.channel.dayStartSec || 0) * 1000;
-    this._cycle = null;
     this._dayCache = new Map();
+    this._rosterRows = new Map(); // 按周期缓存名单
+    this._pool = null;
     this._tmdbIndex = tmdbIndex;
-    this._series = seriesOfEarly(library, this.channel, tmdbIndex);
+  }
+
+  /** 选片后的片池（懒加载） */
+  get pool() {
+    if (!this._pool) {
+      let list = seriesOfEarly(this.library, this.channel, this._tmdbIndex);
+      const wanted = this.channel.grid.pool;
+      if (wanted && wanted.length > 0) {
+        const byId = new Map(list.map((s) => [s.id, s]));
+        const picked = [];
+        for (const sel of wanted) {
+          for (const s of this.library.resolve(sel)) if (byId.has(s.id)) picked.push(s);
+        }
+        if (picked.length > 0) list = [...new Map(picked.map((s) => [s.id, s])).values()];
+      }
+      this._pool = list;
+    }
+    return this._pool;
   }
 
   get anchorMs() {
     return this.channel.anchorMs;
   }
 
-  /** 某一时刻所属的「播出日」序号（按日切时间对齐） */
+  get anchorDay() {
+    if (this._anchorDay == null) this._anchorDay = localDayIndex(this.channel.anchorMs, this.tz);
+    return this._anchorDay;
+  }
+
+  /** 某一时刻所属的「播出日」序号 */
   dayIndexOf(ms) {
     return localDayIndex(ms - this.dayOffsetMs, this.tz);
   }
 
-  /** 某个播出日的起点（毫秒） */
+  /** 某个播出日的起点 */
   dayStartOf(dayIndex) {
     return dayStartMs(dayIndex, this.tz) + this.dayOffsetMs;
   }
 
-  /**
-   * 展开 program，得到相对 startMs 的节目条目。
-   *
-   * 关键点：段 (segment) 的目标（count / hours）是「每一轮」的配额，
-   * 规则本身的状态会一直延续到跑完为止。于是「2 小时随机 + 6 集轮播」
-   * 的含义是：每轮 2 小时随机 + 6 集轮播，反复交替，直到所有规则都播完
-   * 整个片库——一个循环 = 整库播一遍，之后才回到开头。
-   */
-  expand(startMs) {
-    const entries = [];
-    let cursor = 0; // 相对 startMs 的毫秒
-    const dayLimit = this.mode === 'daily' ? DAY_MS : Number.POSITIVE_INFINITY;
-    const program = this.channel.program;
-    // daily 模式下把「日」编进随机种子，保证每天编排不同但可复现
-    const dayTag = this.mode === 'daily' ? '/d' + localDayIndex(startMs, this.tz) : '';
+  #episodesOf(id) {
+    return this.library.episodesOf(id) || [];
+  }
 
-    const units = program.map((seg, segIndex) => {
-      const ctx = {
-        library: this.library,
-        series: this._series,
-        channel: this.channel,
-        tz: this.tz,
-        seedPrefix: `${this.channel.id}/${segIndex}/${this.channel.seed}${dayTag}`,
-        dayIndex: localDayIndex(startMs, this.tz),
-        dayStartMs: startMs,
-        dayStartSec: this.channel.dayStartSec || 0,
-        cacheKey: segIndex,
-        gridCache: (this._gridCache ||= new Map()),
-      };
-      const engine = makeRule(seg.rule, ctx);
-      return {
-        seg,
-        segIndex,
-        ctx,
-        engine,
-        target: resolveTarget(seg, engine),
-        label: seg.label || seg.rule?.type || `规则 ${segIndex + 1}`,
-        done: false,
-        restarts: 0,
-      };
-    });
+  #runCycles(series) {
+    const n = this.#episodesOf(series.id).length;
+    return Math.max(1, Math.ceil(n / this.channel.grid.episodes));
+  }
 
-    let rounds = 0;
-    const MAX_ENTRIES = 200000;
-    while (rounds++ < 100000 && entries.length < MAX_ENTRIES && cursor < dayLimit) {
-      let progressed = false;
-      for (const u of units) {
-        if (u.done) continue;
-        if (cursor >= dayLimit) {
-          u.done = true;
-          continue;
-        }
-        let pulled = 0;
-        let pulledMs = 0;
-        for (;;) {
-          if (entries.length >= MAX_ENTRIES || cursor >= dayLimit) {
-            u.done = true;
+  /** 名单模式：第 cycle 轮每个位置由哪部、播第几轮集（总是从第 0 轮推进，保证确定性） */
+  #rosterRow(cycle) {
+    const target = Math.min(cycle, 5200);
+    if (this._rosterRows.has(target)) return this._rosterRows.get(target);
+
+    const g = this.channel.grid;
+    const pool = this.pool;
+    const slots = g.perDay * g.cycleDays;
+    const queue = pool.slice(slots);
+    let qpos = 0;
+    let row = pool.slice(0, slots).map((series) => ({ series, start: 0 }));
+    this._rosterRows.set(0, row);
+
+    for (let c = 1; c <= target; c++) {
+      const inRoster = new Set(row.map((x) => x.series.id));
+      row = row.map((seat) => {
+        if (c - seat.start < this.#runCycles(seat.series)) return seat;
+        let next = null;
+        for (let guard = 0; guard < pool.length * 3; guard++) {
+          if (qpos >= queue.length) qpos = 0;
+          const cand = queue[qpos++];
+          if (!inRoster.has(cand.id)) {
+            next = cand;
             break;
           }
-          if (u.target.kind === 'count' && u.target.value !== Infinity && pulled >= u.target.value) break;
-          if (u.target.kind === 'ms' && pulledMs >= u.target.value) break;
-          let ep = u.engine.next(startMs + cursor);
-          if (!ep) {
-            // 规则播完一轮：fill 段（按日编排）或显式 loop 段换新种子重来
-            const canRestart = (u.seg.loop || u.target.kind === 'fill') && !u.engine.noRestart;
-            if (canRestart && u.restarts < 12) {
-              u.restarts++;
-              u.engine = makeRule(u.seg.rule, { ...u.ctx, seedPrefix: `${u.ctx.seedPrefix}#r${u.restarts}` });
-              ep = u.engine.next(startMs + cursor);
-            }
-            if (!ep) {
-              u.done = true;
-              break;
-            }
-          }
-          // 留空标记：只推进游标，不产生节目
-          if (ep && typeof ep.gapMs === "number" && ep.gapMs > 0) {
-            cursor = Math.min(dayLimit, cursor + ep.gapMs);
-            progressed = true;
-            continue;
-          }
-          entries.push({
-            episode: ep,
-            relStart: cursor,
-            durationMs: ep.durationMs,
-            truncated: Boolean(ep.__truncated),
-            segmentIndex: u.segIndex,
-            segmentLabel: ep.__segmentLabel || u.label,
-          });
-          cursor += ep.durationMs;
-          pulled++;
-          pulledMs += ep.durationMs;
-          progressed = true;
         }
-      }
-      if (!progressed) break;
-      if (this.mode === 'daily') break; // 日编排只展开一轮，剩余部分交给 dayPlan 截断
-      const finite = units.filter((u) => !u.engine.endless);
-      if (finite.length === 0) break; // 全是无限规则，只展开一轮避免死循环
-      if (finite.every((u) => u.done)) break; // 有限规则全部播完 → 循环结束
-    }
-
-    if (entries.length === 0) {
-      throw new Error(
-        `频道「${this.channel.name}」的编排没有产出任何节目：请检查 library 过滤条件与 program 规则（库内共 ${this.library.series.length} 部 / ${this.library.episodes.length} 集）`,
-      );
-    }
-    return { entries, totalMs: cursor };
-  }
-
-  /** loop 模式：固定循环 */
-  cycle() {
-    if (!this._cycle) {
-      const { entries } = this.expand(this.anchorMs);
-      let totalMs = 0;
-      for (const e of entries) {
-        e.absStart = this.anchorMs + e.relStart;
-        totalMs = Math.max(totalMs, e.relStart + e.durationMs);
-      }
-      this._cycle = { entries, totalMs };
-    }
-    return this._cycle;
-  }
-
-  /** daily 模式：某本地日的节目表（跨零点截断） */
-  dayPlan(dayIndex) {
-    const cached = this._dayCache.get(dayIndex);
-    if (cached) return cached;
-    const start = this.dayStartOf(dayIndex);
-    const { entries } = this.expand(start);
-    const out = [];
-    for (const e of entries) {
-      if (e.relStart >= DAY_MS) break;
-      const room = DAY_MS - e.relStart;
-      const dur = Math.min(e.durationMs, room);
-      if (dur <= 0) break;
-      out.push({
-        ...e,
-        absStart: start + e.relStart,
-        durationMs: dur,
-        truncated: Boolean(e.truncated) || dur < e.durationMs,
+        if (!next) return seat;
+        inRoster.delete(seat.series.id);
+        inRoster.add(next.id);
+        return { series: next, start: c };
       });
+      this._rosterRows.set(c, row);
     }
-    const last = out[out.length - 1];
-    const totalMs = last ? last.absStart + last.durationMs - start : 0;
-    const plan = { dayIndex, dayStart: start, entries: out, totalMs };
-    if (this._dayCache.size > 16) this._dayCache.delete(this._dayCache.keys().next().value);
+    return row;
+  }
+
+  /** 某一天的排片（含留白） */
+  #buildDay(dayIndex) {
+    const g = this.channel.grid;
+    const pool = this.pool;
+    const day = dayIndex - this.anchorDay;
+    const slots = g.perDay * g.cycleDays;
+    const useRoster = g.cycleDays > 0 && slots > 0 && pool.length > slots;
+
+    const cycleDay = useRoster ? mod(day, g.cycleDays) : 0;
+    const cycleIndex = useRoster ? Math.max(0, Math.floor(day / g.cycleDays)) : 0;
+    const rosterRow = useRoster ? this.#rosterRow(cycleIndex) : null;
+
+    const dayStart = this.dayStartOf(dayIndex);
+    const gStart = g.startSec;
+    const offsetSec = mod(gStart - this.channel.dayStartSec, 86400);
+    const entries = [];
+    let t = offsetSec * 1000; // 相对播出日起点
+
+    for (let j = 0; j < g.perDay && pool.length > 0; j++) {
+      let series;
+      let occurrence;
+      if (useRoster) {
+        const seat = rosterRow[cycleDay * g.perDay + j];
+        if (!seat) continue;
+        series = seat.series;
+        occurrence = cycleIndex - seat.start;
+      } else {
+        const idx = day * g.perDay + j;
+        series = pool[mod(idx, pool.length)];
+        occurrence = Math.floor(idx / pool.length);
+      }
+      const all = this.#episodesOf(series.id);
+      if (all.length === 0) continue;
+
+      const totalOcc = Math.max(1, Math.ceil(all.length / g.episodes));
+      const airing = g.loopEpisodes === 'stop' ? Math.max(0, occurrence) : mod(occurrence, totalOcc);
+
+      const used = new Set();
+      for (let k = 0; k < g.episodes; k++) {
+        let idx = airing * g.episodes + k;
+        if (idx >= all.length) {
+          if (g.loopEpisodes === 'stop') break;
+          idx %= all.length;
+        }
+        if (used.has(idx)) break;
+        used.add(idx);
+        const ep = all[idx];
+
+        entries.push({
+          episode: ep,
+          relStart: t,
+          durationMs: ep.durationMs,
+          truncated: false,
+          segmentLabel: series.displayName,
+        });
+        t += ep.durationMs;
+        // 对齐到下一个网格点，剩下的时间留白
+        const absEnd = dayStart + t;
+        const nextSlot = Math.ceil(absEnd / (g.slotMinutes * 60000)) * g.slotMinutes * 60000;
+        t = nextSlot - dayStart;
+      }
+    }
+
+    const last = entries[entries.length - 1];
+    return {
+      dayIndex,
+      dayStart,
+      entries,
+      totalMs: last ? last.relStart + last.durationMs : 0,
+    };
+  }
+
+  dayPlan(dayIndex) {
+    const hit = this._dayCache.get(dayIndex);
+    if (hit) return hit;
+    const plan = this.#buildDay(dayIndex);
+    if (this._dayCache.size > 32) this._dayCache.delete(this._dayCache.keys().next().value);
     this._dayCache.set(dayIndex, plan);
     return plan;
   }
 
-  /** 定位：给定时刻返回当前节目 + 进度 */
+  /** 定位某个时刻在播什么；留空时段返回 { off: true } */
   resolve(nowMs) {
-    if (this.mode === 'daily') {
-      const day = this.dayIndexOf(nowMs);
-      let plan = this.dayPlan(day);
-      let offset = nowMs - plan.dayStart;
-      if (offset < 0 || offset >= DAY_MS) {
-        plan = this.dayPlan(day + 1);
-        offset = nowMs - plan.dayStart;
-      }
-      const hit = findEntryByTime(plan.entries, nowMs, 'absStart');
-      if (hit) return makeResolved(this, hit.entry, hit.entry.absStart, nowMs, hit.entry.truncated);
-      // 留空时段：给出下一档，播放器进入待机
-      const next = plan.entries.find((e) => e.absStart > nowMs);
-      if (next) return makeOff(this, next.absStart, next);
-      const nextPlan = this.dayPlan(day + 1);
-      const first = nextPlan.entries[0];
-      if (!first) return makeOff(this, null, null);
-      return makeOff(this, first.absStart, first);
-    }
+    const day = this.dayIndexOf(nowMs);
+    const plan = this.dayPlan(day);
+    const hit = this.#findEntry(plan, nowMs);
+    if (hit) return makeResolved(this, plan, hit, nowMs);
 
-    const { entries, totalMs } = this.cycle();
-    const delta = nowMs - this.anchorMs;
-    const k = Math.floor(delta / totalMs);
-    const pos = delta - k * totalMs;
-    const hit = findEntryByTime(entries, pos, 'relStart');
-    if (hit) {
-      const startsAt = this.anchorMs + k * totalMs + hit.entry.relStart;
-      return makeResolved(this, hit.entry, startsAt, nowMs, false);
-    }
-    const nextUp = entries.find((e) => e.relStart > pos);
-    if (nextUp) return makeOff(this, this.anchorMs + k * totalMs + nextUp.relStart, nextUp);
-    const firstEntry = entries[0];
-    return makeOff(this, this.anchorMs + (k + 1) * totalMs + firstEntry.relStart, firstEntry);
+    const next = plan.entries.find((e) => plan.dayStart + e.relStart > nowMs);
+    if (next) return makeOff(this, plan.dayStart + next.relStart, next);
+    const nextDay = this.dayPlan(day + 1);
+    const first = nextDay.entries[0];
+    if (!first) return makeOff(this, null, null);
+    return makeOff(this, nextDay.dayStart + first.relStart, first);
   }
 
-  /**
-   * 节目单：从 fromMs 起，最多 limit 条或到 toMs 为止
-   */
+  #findEntry(plan, nowMs) {
+    for (const e of plan.entries) {
+      const abs = plan.dayStart + e.relStart;
+      if (nowMs >= abs && nowMs < abs + e.durationMs) return e;
+    }
+    return null;
+  }
+
+  /** 节目单：从 fromMs 起，最多 limit 条或到 toMs 为止（含留空行） */
   schedule(fromMs, toMs, limit = 50) {
     const out = [];
     const pushGap = (from, to) => {
       if (to <= from || out.length >= limit) return;
       out.push({ kind: 'gap', startsAt: from, endsAt: to, durationMs: to - from, truncated: false, segmentLabel: '留空', episode: null });
     };
-    if (this.mode === 'daily') {
-      let day = this.dayIndexOf(fromMs);
-      let guard = 0;
-      let cursor = fromMs;
-      while (out.length < limit && guard++ < 400) {
-        const plan = this.dayPlan(day);
-        for (const e of plan.entries) {
-          const ends = e.absStart + e.durationMs;
-          if (ends <= fromMs) continue;
-          if (e.absStart >= toMs) {
-            pushGap(cursor, toMs);
-            return out;
-          }
-          if (e.absStart > cursor) pushGap(cursor, e.absStart);
-          if (out.length >= limit) break;
-          out.push(toProgramItem(e, e.absStart, e.durationMs, e.truncated));
-          cursor = ends;
-          if (ends >= toMs) return out;
-        }
-        day++;
-        if (this.dayStartOf(day) > toMs) break;
-      }
-      return out;
-    }
-
-    const { entries, totalMs } = this.cycle();
-    const delta = fromMs - this.anchorMs;
-    let k = Math.floor(delta / totalMs);
-    let pos = delta - k * totalMs;
+    let day = this.dayIndexOf(fromMs);
     let guard = 0;
-    let idx = entries.findIndex((e) => pos >= e.relStart && pos < e.relStart + e.durationMs);
-    if (idx < 0) idx = entries.findIndex((e) => e.relStart > pos);
-    if (idx < 0) idx = 0;
     let cursor = fromMs;
-    while (out.length < limit && guard++ < 100000) {
-      const e = entries[idx];
-      const startsAt = this.anchorMs + k * totalMs + e.relStart;
-      if (startsAt >= toMs) {
-        pushGap(cursor, toMs);
-        break;
+    while (out.length < limit && guard++ < 400) {
+      const plan = this.dayPlan(day);
+      for (const e of plan.entries) {
+        const start = plan.dayStart + e.relStart;
+        const ends = start + e.durationMs;
+        if (ends <= fromMs) continue;
+        if (start >= toMs) {
+          pushGap(cursor, toMs);
+          return out;
+        }
+        if (start > cursor) pushGap(cursor, start);
+        if (out.length >= limit) break;
+        out.push({
+          startsAt: start,
+          endsAt: ends,
+          durationMs: e.durationMs,
+          truncated: Boolean(e.truncated),
+          segmentLabel: e.segmentLabel,
+          episode: e.episode,
+        });
+        cursor = ends;
+        if (ends >= toMs) return out;
       }
-      if (startsAt > cursor) pushGap(cursor, startsAt);
-      out.push(toProgramItem(e, startsAt, e.durationMs, false));
-      cursor = startsAt + e.durationMs;
-      idx++;
-      if (idx >= entries.length) {
-        idx = 0;
-        k++;
-      }
+      day++;
+      if (this.dayStartOf(day) > toMs) break;
     }
     return out;
   }
 
   stats() {
-    if (this.mode === 'daily') {
-      const today = this.dayIndexOf(Date.now());
-      const plan = this.dayPlan(today);
-      return {
-        mode: 'daily',
-        dayEntries: plan.entries.length,
-        dayDurationMs: plan.totalMs,
-        poolSeries: this._series.length,
-        poolEpisodes: this._series.reduce((a, s) => a + s.episodes.length, 0),
-      };
-    }
-    const { entries, totalMs } = this.cycle();
+    const today = this.dayIndexOf(Date.now());
+    const plan = this.dayPlan(today);
     return {
-      mode: 'loop',
-      cycleEntries: entries.length,
-      cycleDurationMs: totalMs,
-      poolSeries: this._series.length,
-      poolEpisodes: this._series.reduce((a, s) => a + s.episodes.length, 0),
-      cycleDays: totalMs / DAY_MS,
+      mode: 'daily',
+      dayEntries: plan.entries.length,
+      dayDurationMs: plan.totalMs,
+      poolSeries: this.pool.length,
+      poolEpisodes: this.pool.reduce((a, s) => a + s.episodes.length, 0),
+      grid: this.channel.grid,
     };
   }
 }
 
 /* ------------------------------------------------------------------ *
- * 辅助
+ * 解析结果
  * ------------------------------------------------------------------ */
 
-function resolveTarget(seg, engine) {
-  if (seg.count != null) return { kind: 'count', value: Math.max(1, Math.floor(seg.count)) };
-  if (seg.fill) return { kind: 'fill', value: 0 };
-  if (seg.hours != null) return { kind: 'ms', value: seg.hours * 3600000 };
-  if (seg.minutes != null) return { kind: 'ms', value: seg.minutes * 60000 };
-  if (seg.durationMs != null) return { kind: 'ms', value: seg.durationMs };
-  if (seg.all) return { kind: 'count', value: Number.POSITIVE_INFINITY };
-  // 未指定：有限规则播完一轮；无限规则给个默认段长
-  if (engine.endless) return { kind: 'count', value: DEFAULT_SEGMENT_COUNT };
-  return { kind: 'count', value: Number.POSITIVE_INFINITY };
-}
-
-function findEntryByTime(entries, t, key) {
-  let lo = 0;
-  let hi = entries.length - 1;
-  while (lo <= hi) {
-    const mid = (lo + hi) >> 1;
-    const e = entries[mid];
-    const start = e[key];
-    if (t < start) hi = mid - 1;
-    else if (t >= start + e.durationMs) lo = mid + 1;
-    else return { entry: e, index: mid };
-  }
-  return null;
-}
-
-function makeResolved(tl, entry, startsAt, nowMs, truncated) {
-  const endsAt = startsAt + entry.durationMs;
+function makeResolved(tl, plan, entry, nowMs) {
+  const absStart = plan.dayStart + entry.relStart;
+  const endsAt = absStart + entry.durationMs;
   return {
     entry,
     episode: entry.episode,
-    startsAt,
+    startsAt: absStart,
     endsAt,
     durationMs: entry.durationMs,
-    offsetMs: Math.max(0, Math.min(entry.durationMs, nowMs - startsAt)),
+    offsetMs: Math.max(0, Math.min(entry.durationMs, nowMs - absStart)),
     remainingMs: Math.max(0, endsAt - nowMs),
-    progress: entry.durationMs > 0 ? Math.max(0, Math.min(1, (nowMs - startsAt) / entry.durationMs)) : 0,
-    truncated: Boolean(truncated),
+    progress: entry.durationMs > 0 ? Math.max(0, Math.min(1, (nowMs - absStart) / entry.durationMs)) : 0,
+    truncated: Boolean(entry.truncated),
     segmentLabel: entry.segmentLabel,
     channel: tl.channel,
   };
 }
 
-/** 留空时段：没有节目在播，next 表示下一档 */
 function makeOff(tl, nextAt, entry) {
   return {
     off: true,
@@ -898,66 +403,18 @@ function makeOff(tl, nextAt, entry) {
   };
 }
 
-function toProgramItem(entry, startsAt, durationMs, truncated) {
-  return {
-    startsAt,
-    endsAt: startsAt + durationMs,
-    durationMs,
-    truncated: Boolean(truncated),
-    segmentLabel: entry.segmentLabel,
-    episode: entry.episode,
-  };
-}
-
-/** 复用已解析的剧集对象，避免每次重新 bind */
+/** 复用已解析的剧集对象 */
 export function episodeView(ep) {
   return {
     fileId: ep.fileId,
-    seriesId: ep.seriesId,
     series: ep.seriesName,
     season: ep.season,
     episode: ep.episode,
-    title: ep.title,
+    title: ep.title || ep.name,
     name: ep.name,
     relPath: ep.relPath,
     size: ep.size,
     durationMs: ep.durationMs,
-    durationText: fmtDuration(ep.durationMs),
     subtitle: ep.subtitle || null,
-    container: ep.container,
   };
-}
-
-/* ------------------------------------------------------------------ *
- * 频道定义归一化
- * ------------------------------------------------------------------ */
-
-export function normalizeChannel(def, tz = 'Asia/Shanghai') {
-  if (!def || !def.id) throw new Error('频道定义缺少 id');
-  const program = def.program || def.rules || [];
-  const norm = {
-    id: String(def.id),
-    name: def.name || def.id,
-    description: def.description || '',
-    mode: def.mode === 'daily' ? 'daily' : 'loop',
-    dayStart: def.dayStart || '00:00',
-    dayStartSec: def.dayStart ? parseClock(def.dayStart) : 0,
-    seed: def.seed ?? def.id,
-    library: def.library || {},
-    weights: def.weights || null,
-    // 已经归一化过的频道只有 anchorMs（没有 anchor 字符串），必须优先沿用，
-    // 否则每次重新归一化都会被重置成默认锚点
-    anchorMs: Number.isFinite(Number(def.anchorMs))
-      ? Number(def.anchorMs)
-      : def.anchor
-        ? Date.parse(def.anchor)
-        : Date.parse('2024-01-01T00:00:00+08:00'),
-    program: program.length > 0 ? program : [{ rule: { type: 'sequential' } }],
-  };
-  if (Number.isNaN(norm.anchorMs)) throw new Error(`频道 ${norm.id} 的 anchor 时间无法解析：${def.anchor}`);
-  norm.program = norm.program.map((seg, i) => {
-    if (!seg || !seg.rule) throw new Error(`频道 ${norm.id} 第 ${i + 1} 段缺少 rule`);
-    return seg;
-  });
-  return norm;
 }

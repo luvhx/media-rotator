@@ -164,7 +164,7 @@ function applyNow(prevFileId) {
   renderEpg();
   updateUi();
   setStatus(
-    `${data.channel.name} · ${data.channel.mode === 'daily' ? '按日编排' : '循环编排'}${data.channel.description ? ' · ' + data.channel.description : ''}`,
+    `${data.channel.name} · 时间网格${data.channel.description ? ' · ' + data.channel.description : ''}`,
   );
   scheduleFetch(10000);
 }
@@ -199,7 +199,12 @@ function applyOff() {
   $('epLabel').textContent = '';
   $('epTitle').textContent = next ? `下一档 ${fmtHHMM(next.startsAt)}` : '';
   $('segLabel').style.display = 'none';
-  $('directLink').removeAttribute('href');
+  try {
+    const link = $('directLink');
+    if (link && typeof link.removeAttribute === 'function') link.removeAttribute('href');
+  } catch {
+    /* 忽略：待机时链接不可用 */
+  }
   $('epgSub').textContent = next ? `— 至 ${fmtHHMM(next.startsAt)}` : '—';
   renderEpg();
   setStatus(`${data.channel.name} · 留空时段`);
@@ -541,14 +546,15 @@ function renderEpg() {
   const data = state.now;
   if (!data) return;
   const list = $('epgList');
-  const items = [data.now, ...(data.next || [])].slice(0, 14);
+  const items = [data.now, ...(data.next || [])].filter(Boolean).slice(0, 14);
   list.textContent = '';
   items.forEach((item, idx) => {
+    const isNow = !data.off && idx === 0;
     const li = document.createElement('li');
-    li.className = 'epg-item' + (idx === 0 ? ' current' : '');
+    li.className = 'epg-item' + (isNow ? ' current' : '');
     const t = document.createElement('span');
     t.className = 't';
-    t.textContent = idx === 0 ? 'NOW' : fmtHHMM(item.startsAt);
+    t.textContent = isNow ? 'NOW' : fmtHHMM(item.startsAt);
     const body = document.createElement('div');
     body.className = 'body';
     const name = document.createElement('div');

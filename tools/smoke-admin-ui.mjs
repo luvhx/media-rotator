@@ -11,7 +11,7 @@
 const BASE = process.env.BASE_URL || 'http://127.0.0.1:8088';
 const errors = [];
 process.on('unhandledRejection', (e) => errors.push(`unhandledRejection: ${e?.message || e}`));
-process.on('uncaughtException', (e) => errors.push(`uncaughtException: ${e?.message || e}`));
+process.on('uncaughtException', (e) => { console.error("DBG uncaught:", e && e.stack ? e.stack.split("\n").slice(0,3).join(" | ") : e); errors.push(`uncaughtException: ${e?.message || e}`); });
 
 /* ------------------------------ DOM 桩 ------------------------------ */
 
@@ -282,42 +282,17 @@ check(q('channelEditor').children.length > 0, '编排编辑器渲染', `${q('cha
 check(q('btnAddChannel') !== null, '新建频道按钮存在');
 
 // 编排段：摘要 + 时间网格参数区
-const summary0 = q('channelEditor').querySelector('.seg-summary');
-check(Boolean(summary0) && summary0.textContent.length > 5, '编排段显示摘要', summary0 ? summary0.textContent.slice(0, 30) : '(无)');
+const summary0 = q('channelEditor').querySelector('.grid-summary');
+check(Boolean(summary0) && summary0.textContent.length > 5, '编排摘要显示', summary0 ? summary0.textContent.slice(0, 40) : '(无)');
 
-const segBox = q('channelEditor').querySelector('.seg');
-const typeSel = segBox ? segBox.querySelector('select') : null;
-if (typeSel) {
-  typeSel.value = 'grid';
-  typeSel.dispatch('change');
-  await wait(300);
-  const params = q('channelEditor').querySelector('.seg-params');
-  check(Boolean(params), '时间网格：参数区分组显示');
-  const sum = q('channelEditor').querySelector('.seg-summary');
-  const text = sum ? sum.textContent : '';
-  check(text.includes('每天') && text.includes('对齐'), '时间网格：摘要可读', text.slice(0, 46));
-
-  // 分时段 + 时间网格：子规则参数区（注意桩不支持后代选择器，逐层取）
-  const segBox2 = q('channelEditor').querySelector('.seg');
-  const typeSel2 = segBox2 ? segBox2.querySelector('select') : null;
-  if (typeSel2) {
-    typeSel2.value = 'daypart';
-    typeSel2.dispatch('change');
-    await wait(300);
-    const rows = q('channelEditor').querySelectorAll('.slot-row');
-    check(rows.length > 0, '分时段：时段行渲染', rows.length + ' 行');
-    const slotSel = rows[0] ? rows[0].querySelector('select') : null;
-    if (slotSel) {
-      slotSel.value = 'grid';
-      slotSel.dispatch('change');
-      await wait(300);
-      const slotParams = q('channelEditor').querySelector('.slot-params');
-      check(Boolean(slotParams), '分时段：子规则选时间网格后出现参数区');
-      const inputs = slotParams ? slotParams.querySelectorAll('input').length + slotParams.querySelectorAll('select').length + slotParams.querySelectorAll('textarea').length : 0;
-      check(inputs >= 5, '分时段：时间网格参数齐全', inputs + ' 个控件');
-    }
-  }
-}
+// 网格表单：开始时间 / 每天几部 / 每部几集 / 循环周期
+const inputs = q('channelEditor').querySelectorAll('input');
+const typeOf = (i) => i.getAttribute('type') || i.type || '';
+const nums = inputs.filter((i) => typeOf(i) === 'number');
+const times = inputs.filter((i) => typeOf(i) === 'time');
+check(times.length >= 2, '网格表单：日切与开始时间', times.length + ' 个时间框');
+check(nums.length >= 4, '网格表单：部数/集数/周期', nums.length + ' 个数字框');
+check(q('channelEditor').querySelectorAll('textarea').length >= 1, '网格表单：片池输入框');
 
 // 切到预览
 tabs[4].dispatch('click');

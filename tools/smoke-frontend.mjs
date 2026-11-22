@@ -150,21 +150,34 @@ if (process.env.SMOKE_COMPAT === '1') {
   await wait(1500);
 }
 
-log(!!player.src, '播放器已设置 src', player.src);
-log(!q('overlay').classList.contains('hidden') === false, '开始后隐藏遮罩');
-log(player.currentTime > 0, '已按时间轴 seek 到当前进度', 'currentTime=' + player.currentTime.toFixed(1) + 's');
-const now = await (await fetch('/api/now?channel=main')).json();
-const expect = now.now.offsetMs / 1000;
-log(Math.abs(player.currentTime - expect) < 6, 'seek 位置与后端偏移一致', `期望≈${expect.toFixed(1)}s 实际=${player.currentTime.toFixed(1)}s`);
-log(q('progressFill').style.width?.endsWith('%'), '进度条更新', q('progressFill').style.width);
-log(q('syncText').className.includes('sync'), '同步状态', q('syncText').textContent);
+const nowData = await (await fetch('/api/now?channel=main')).json();
 
-// 桩里的 video 不会自己走时间，漂移累积后 tick 应再次 seek 回直播位置
-const t0 = player.currentTime;
-await wait(6000);
-const now2 = await (await fetch('/api/now?channel=main')).json();
-const expected2 = now2.now.offsetMs / 1000;
-log(Math.abs(player.currentTime - expected2) < 8, '漂移自动重同步', `${t0.toFixed(1)}s → ${player.currentTime.toFixed(1)}s（期望≈${expected2.toFixed(1)}s）`);
+if (nowData.off) {
+  // 时间网格允许留空：此刻可能处于待机
+  log(q('overlay').classList.contains('hidden') === false, '留空时段显示待机遮罩');
+  log(!player.src, '留空时段不加载视频', player.src || '(空)');
+  log(q('epTitle').textContent.includes('下一档'), '待机提示下一档时间', q('epTitle').textContent);
+  log(typeof nowData.until === 'number' && nowData.until > nowData.serverTime, '待机给出恢复时间');
+} else {
+  log(!!player.src, '播放器已设置 src', player.src);
+  log(!q('overlay').classList.contains('hidden') === false, '开始后隐藏遮罩');
+  log(player.currentTime > 0, '已按时间轴 seek 到当前进度', 'currentTime=' + player.currentTime.toFixed(1) + 's');
+  const expect = nowData.now.offsetMs / 1000;
+  log(Math.abs(player.currentTime - expect) < 6, 'seek 位置与后端偏移一致', `期望≈${expect.toFixed(1)}s 实际=${player.currentTime.toFixed(1)}s`);
+  log(q('progressFill').style.width?.endsWith('%'), '进度条更新', q('progressFill').style.width);
+  log(q('syncText').className.includes('sync'), '同步状态', q('syncText').textContent);
+
+  // 桩里的 video 不会自己走时间，漂移累积后 tick 应再次 seek 回直播位置
+  const t0 = player.currentTime;
+  await wait(6000);
+  const now2 = await (await fetch('/api/now?channel=main')).json();
+  if (!now2.off && now2.now) {
+    const expected2 = now2.now.offsetMs / 1000;
+    log(Math.abs(player.currentTime - expected2) < 8, '漂移自动重同步', `${t0.toFixed(1)}s → ${player.currentTime.toFixed(1)}s（期望≈${expected2.toFixed(1)}s）`);
+  } else {
+    log(true, '6 秒后进入留空时段（跳过重同步校验）');
+  }
+}
 
 if (errors.length) {
   console.log('\n运行时错误：');

@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { isValidTimeZone } from './util.mjs';
-import { RULE_TYPES, normalizeChannel } from './scheduler.mjs';
+import { normalizeChannel } from './scheduler.mjs';
 
 /**
  * 运行期设置（Web UI 可改）
@@ -175,50 +175,38 @@ export function validateSettings(settings, { baseConfig, timezone } = {}) {
     const ids = new Set();
     for (const ch of settings.channels) {
       if (!ch || !ch.id) throw new Error('频道缺少 id');
-      if (ids.has(ch.id)) throw new Error(`频道 id 重复：${ch.id}`);
+      if (ids.has(ch.id)) throw new Error('频道 id 重复：' + ch.id);
       ids.add(ch.id);
-      if (!Array.isArray(ch.program) || ch.program.length === 0) {
-        throw new Error(`频道「${ch.name || ch.id}」至少需要一个编排段`);
+      const label = '频道「' + (ch.name || ch.id) + '」';
+      const g = ch.grid;
+      if (!g || typeof g !== 'object') throw new Error(label + ' 缺少时间网格配置');
+      if (!/^\d{1,2}:\d{2}(:\d{2})?$/.test(String(g.start || ''))) {
+        throw new Error(label + ' 的开始时间格式应为 HH:MM');
       }
-      for (const seg of ch.program) {
-        if (!seg || !seg.rule || !seg.rule.type) throw new Error(`频道「${ch.name || ch.id}」有编排段缺少规则类型`);
-        if (!RULE_TYPES.includes(seg.rule.type)) {
-          throw new Error(`频道「${ch.name || ch.id}」用了未知规则类型：${seg.rule.type}`);
+      const num = (key, min, max, fallback) => {
+        if (g[key] === undefined || g[key] === null || g[key] === '') return fallback;
+        const v = Number(g[key]);
+        if (!Number.isFinite(v) || v < min || v > max) {
+          throw new Error(label + ' 的 ' + key + ' 需在 ' + min + '~' + max + ' 之间');
         }
-        validateRule(seg.rule, ch, seg);
+        return v;
+      };
+      num('slotMinutes', 5, 180, 30);
+      num('perDay', 1, 48, 3);
+      num('episodes', 1, 48, 2);
+      num('cycleDays', 0, 31, 7);
+      if (g.pool !== undefined && g.pool !== null && !Array.isArray(g.pool)) {
+        throw new Error(label + ' 的片池必须是数组');
       }
-      // 借 normalizeChannel 校验锚点与结构
+      // 借 normalizeChannel 校验日切、锚点与结构
       normalizeChannel(ch, tz);
     }
   }
   return true;
 }
 
-function validateRule(rule, channel, seg) {
-  const label = `频道「${channel.name || channel.id}」的规则 ${rule.type}`;
-  if (rule.type === 'daypart') {
-    if (!Array.isArray(rule.slots) || rule.slots.length === 0) throw new Error(`${label} 需要至少一个时段`);
-    for (const slot of rule.slots) {
-      if (!/^\d{1,2}:\d{2}(:\d{2})?$/.test(String(slot.from || ''))) throw new Error(`${label} 的时段开始时间格式应为 HH:MM`);
-      if (!/^\d{1,2}:\d{2}(:\d{2})?$/.test(String(slot.to || ''))) throw new Error(`${label} 的时段结束时间格式应为 HH:MM`);
-      if (!slot.rule || !slot.rule.type) throw new Error(`${label} 的时段缺少子规则`);
-      if (!RULE_TYPES.includes(slot.rule.type)) throw new Error(`${label} 的时段子规则类型未知：${slot.rule.type}`);
-    }
-  }
-  if (rule.type === 'manual') {
-    if (!Array.isArray(rule.items) || rule.items.length === 0) throw new Error(`${label} 需要至少一个节目项`);
-  }
-  const targets = ['count', 'hours', 'minutes', 'durationMs', 'all', 'fill'];
-  const used = targets.filter((k) => seg[k] !== undefined && seg[k] !== null && seg[k] !== false);
-  if (used.length > 1) throw new Error(`${label} 的段长度设置冲突（${used.join(' / ')} 只能选一个）`);
-  if (seg.count !== undefined && (!Number.isInteger(Number(seg.count)) || Number(seg.count) < 1)) {
-    throw new Error(`${label} 的 count 需为正整数`);
-  }
-  if (seg.hours !== undefined && !(Number(seg.hours) > 0)) throw new Error(`${label} 的 hours 需大于 0`);
-  if (seg.minutes !== undefined && !(Number(seg.minutes) > 0)) throw new Error(`${label} 的 minutes 需大于 0`);
-}
 
-/** 给前端用的脱敏副本（不含密码） */
+/** 给前端看的设置（去掉密码 / token 等敏感字段） */
 export function publicSettings(settings = {}) {
   const out = structuredClone(settings);
   if (out.webdav) {

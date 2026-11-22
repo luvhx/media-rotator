@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { WebDavClient } from './webdav.mjs';
 import { Library, DurationCache, scanLibrary } from './library.mjs';
-import { ChannelTimeline, episodeView, RULE_TYPES } from './scheduler.mjs';
+import { ChannelTimeline, episodeView } from './scheduler.mjs';
 import { buildFileUrl, sendRedirect, proxyFile, sendFileWithRange } from './stream.mjs';
 import { dayStartMs, localParts, fmtDuration, toMs, clamp, mapLimit } from './util.mjs';
 import {
@@ -268,7 +268,18 @@ export function createApp(baseConfig) {
     } catch (err) {
       error = err.message;
     }
-    return { id: def.id, name: def.name, description: def.description || '', mode: def.mode, stats, error };
+    return {
+      id: def.id,
+      name: def.name,
+      description: def.description || '',
+      mode: def.mode,
+      dayStart: def.dayStart || '00:00',
+      anchor: new Date(def.anchorMs).toISOString(),
+      grid: def.grid,
+      library: def.library || {},
+      stats,
+      error,
+    };
   }
 
   /* ------------------------- 公共 API ------------------------- */
@@ -495,20 +506,7 @@ export function createApp(baseConfig) {
       },
       settings: publicSettings(state.settings),
       defaults: publicSettings(settingsFromConfig(cfg)),
-      channels: cfg.channels.map((ch) => {
-        const summary = channelSummary(ch);
-        return {
-          id: ch.id,
-          name: ch.name,
-          description: ch.description || '',
-          mode: ch.mode,
-          dayStart: ch.dayStart || '00:00',
-          anchor: new Date(ch.anchorMs).toISOString(),
-          program: ch.program,
-          stats: summary.stats,
-          error: summary.error,
-        };
-      }),
+      channels: cfg.channels.map((ch) => channelSummary(ch)),
       selection: normalizeSelection(cfg.selection),
       library: {
         series: lib.series.length,
@@ -520,7 +518,6 @@ export function createApp(baseConfig) {
         error: state.error,
       },
       scan: state.scan,
-      ruleTypes: RULE_TYPES,
       tmdb: { enabled: state.tmdb.enabled, mode: state.tmdb.mode, lastError: state.tmdb.lastError },
     };
   }
@@ -1024,7 +1021,7 @@ export function createApp(baseConfig) {
           serverTime: Date.now(),
           timezone: state.config.timezone,
           stream: { mode: state.config.stream.mode, urlPrefix: state.config.stream.urlPrefix },
-          channels: state.config.channels.map((c) => ({ id: c.id, name: c.name, description: c.description, mode: c.mode })),
+          channels: state.config.channels.map((c) => channelSummary(c)),
           library: { series: state.library.series.length, episodes: state.library.episodes.length },
           ready: state.library.episodes.length > 0 && configured() && state.config.channels.length > 0,
         });

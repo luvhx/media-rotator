@@ -59,7 +59,7 @@ server.listen(port, host, () => {
   console.log(`  ├ 节目库 ${lib.series.length} 部 / ${lib.episodes.length} 集${lib.episodes.length ? ' / ' + fmtDuration(lib.episodes.reduce((a, e) => a + e.durationMs, 0)) : '（还没扫描）'}`);
   console.log(`  ├ 时区   ${cfg.timezone}`);
   console.log(`  ├ 取流   ${cfg.stream.mode === 'redirect' ? '302 直链' : '后端代理'} → ${cfg.stream.urlPrefix || '(未配置)'}`);
-  console.log(`  └ 频道   ${cfg.channels.length ? cfg.channels.map((c) => `${c.id}(${c.mode})`).join('  ') : '（还没有频道，打开 /admin 新建）'}`);
+  console.log(`  └ 频道   ${cfg.channels.length ? cfg.channels.map((c) => `${c.id}(${c.grid?.start || '20:00'} · ${c.grid?.perDay || 3}部/天)`).join('  ') : '（还没有频道，打开 /admin 新建）'}`);
   if (!lib.episodes.length) {
     console.log('');
     console.log('  ⚠ 还没有媒体库索引：打开 /admin 填写 WebDAV 信息并点「开始扫描」');
