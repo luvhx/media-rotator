@@ -1,15 +1,19 @@
 /**
- * 编排引擎（v3：只有「时间网格」一种模式）
+ * 编排引擎（v3.1：时间网格 + 分时段）
  * ------------------------------------------------------------------
- * 一个频道 = 一张按「整点 / 半点」对齐的节目表：
+ * 一个频道 = 若干「时段」，每个时段各自是一张按整点 / 半点对齐的网格表：
  *
- *   - 每天从 grid.start 开始，取 grid.perDay 部，每部 grid.episodes 集
- *   - 每集占用 ceil(时长 / slotMinutes) 个网格，剩余时间留空
- *   - grid.cycleDays > 0 时，每天部数 × 周期天数 = 固定名单；
- *     片池超出的影片排队，某个位置上的影片播完后由队列补位
- *   - 播出日由 channel.dayStart 决定（默认 00:00；设 06:00 就是 06:00 → 次日 06:00）
+ *   channel.slots[] = {
+ *     from, to, label,              // 时段窗口（可跨零点，如 18:00 → 24:00）
+ *     grid: { start, slotMinutes, perDay, episodes, cycleDays, loopEpisodes, pool },
+ *     library: { ... }              // 该时段自己的选片条件（series/exclude/tmdb/...）
+ *   }
  *
- * 所有「随机」都使用确定性 PRNG，同一频道 + 同一天永远得到同一编排。
+ * 排片规则：
+ *   - 每集从整点 / 半点开始；占 ceil(时长 / slotMinutes) 个网格，放不下就顺延
+ *   - 一个网格没用满 → 留白（播放器待机）
+ *   - 节目活不过时段末尾 → 截断（电视台到点就切）
+ *   - cycleDays > 0：perDay × cycleDays 是固定名额，片池超出的排队补位
  */
 
 import { localDayIndex, dayStartMs, parseClock } from './util.mjs';
@@ -17,7 +21,7 @@ import { localDayIndex, dayStartMs, parseClock } from './util.mjs';
 const DAY_MS = 86400000;
 
 /* ------------------------------------------------------------------ *
- * 频道归一化
+ * 归一化
  * ------------------------------------------------------------------ */
 
 const DEFAULT_ANCHOR = '2024-01-01T00:00:00+08:00';
@@ -32,14 +36,47 @@ function mod(n, m) {
   return ((n % m) + m) % m;
 }
 
-/**
- * 把旧版（program + rule）配置迁移成网格参数，保证升级后频道还能播。
- * 只取第一个 grid 规则；没有就套用默认值。
- */
-function gridFromLegacy(program) {
-  const seg = (program || []).find((s) => s?.rule?.type === 'grid');
-  const rule = seg?.rule || {};
+function normalizeGrid(raw = {}) {
+  const g = raw && typeof raw === 'object' ? raw : {};
+  const start = g.start || '20:00';
   return {
+    start,
+    startSec: parseClock(start),
+    slotMinutes: clamp(g.slotMinutes ?? 30, 5, 180, 30),
+    perDay: clamp(g.perDay ?? 3, 1, 48, 3),
+    episodes: clamp(g.episodes ?? 2, 1, 48, 2),
+    cycleDays: clamp(g.cycleDays ?? 7, 0, 31, 7),
+    loopEpisodes: g.loopEpisodes === 'stop' ? 'stop' : 'wrap',
+    pool: Array.isArray(g.pool) && g.pool.length > 0 ? g.pool.map(String) : null,
+  };
+}
+
+function normalizeSlot(raw = {}, index = 0) {
+  const from = String(raw.from || '00:00');
+  const to = String(raw.to || '24:00');
+  const fromSec = parseClock(from);
+  const toSec = parseClock(to);
+  let windowSec = toSec - fromSec;
+  if (windowSec <= 0) windowSec += 86400;
+  return {
+    index,
+    from,
+    to,
+    fromSec,
+    toSec,
+    windowSec,
+    label: raw.label || `时段 ${index + 1}`,
+    grid: normalizeGrid(raw.grid),
+    library: raw.library || {},
+  };
+}
+
+/** 旧配置迁移：单网格 → 一个 00:00-24:00 的时段 */
+function slotsFromLegacy(def) {
+  const legacyProgram = def.program || def.rules || [];
+  const seg = legacyProgram.find((s) => s?.rule?.type === 'grid');
+  const rule = seg?.rule || {};
+  const grid = def.grid || {
     start: rule.start || '20:00',
     slotMinutes: rule.slotMinutes || 30,
     perDay: rule.seriesPerDay || 3,
@@ -48,51 +85,43 @@ function gridFromLegacy(program) {
     loopEpisodes: rule.loopEpisodes === 'stop' ? 'stop' : 'wrap',
     pool: Array.isArray(rule.series) ? rule.series : undefined,
   };
+  return [{ from: '00:00', to: '24:00', label: '全天', grid, library: def.library || {} }];
 }
 
 export function normalizeChannel(def, tz = 'Asia/Shanghai') {
   if (!def || !def.id) throw new Error('频道定义缺少 id');
-  const legacy = def.program || def.rules || [];
-  const rawGrid = def.grid && typeof def.grid === 'object' ? def.grid : gridFromLegacy(legacy);
-  const startSec = parseClock(rawGrid.start || '20:00');
+  const rawSlots = Array.isArray(def.slots) && def.slots.length > 0 ? def.slots : slotsFromLegacy(def);
   const dayStart = def.dayStart || '00:00';
+  const anchorMs =
+    def.anchorMs != null && Number.isFinite(Number(def.anchorMs))
+      ? Number(def.anchorMs)
+      : def.anchor
+        ? Date.parse(def.anchor)
+        : Date.parse(DEFAULT_ANCHOR);
+  if (Number.isNaN(anchorMs)) throw new Error(`频道 ${def.id} 的 anchor 时间无法解析`);
 
-  const ch = {
+  const slots = rawSlots.map((s, i) => normalizeSlot({ ...s, library: s.library || def.library || {} }, i));
+  slots.forEach((s, i) => {
+    if (s.label === `时段 ${i + 1}`) s.label = s.label;
+  });
+
+  return {
     id: String(def.id),
     name: def.name || def.id,
     description: def.description || '',
     dayStart,
     dayStartSec: parseClock(dayStart),
-    anchorMs:
-      def.anchorMs != null && Number.isFinite(Number(def.anchorMs))
-        ? Number(def.anchorMs)
-        : def.anchor
-          ? Date.parse(def.anchor)
-          : Date.parse(DEFAULT_ANCHOR),
+    anchorMs,
     seed: def.seed ?? def.id,
-    library: def.library || {},
-    weights: def.weights || null,
-    grid: {
-      start: rawGrid.start || '20:00',
-      startSec,
-      slotMinutes: clamp(rawGrid.slotMinutes ?? 30, 5, 180, 30),
-      perDay: clamp(rawGrid.perDay ?? 3, 1, 48, 3),
-      episodes: clamp(rawGrid.episodes ?? 2, 1, 48, 2),
-      cycleDays: clamp(rawGrid.cycleDays ?? 7, 0, 31, 7),
-      loopEpisodes: rawGrid.loopEpisodes === 'stop' ? 'stop' : 'wrap',
-      pool: Array.isArray(rawGrid.pool) && rawGrid.pool.length > 0 ? rawGrid.pool.map(String) : null,
-    },
+    slots,
   };
-  if (Number.isNaN(ch.anchorMs)) throw new Error(`频道 ${ch.id} 的 anchor 时间无法解析`);
-  return ch;
 }
 
 /* ------------------------------------------------------------------ *
  * 选片
  * ------------------------------------------------------------------ */
 
-function seriesOfEarly(library, channel, tmdbIndex) {
-  const filter = channel.library || {};
+function resolvePool(library, filter = {}, tmdbIndex = null) {
   let list = library.series;
   if (Array.isArray(filter.series) && filter.series.length > 0) {
     const picked = [];
@@ -120,27 +149,9 @@ export class ChannelTimeline {
     this.tz = tz;
     this.dayOffsetMs = (this.channel.dayStartSec || 0) * 1000;
     this._dayCache = new Map();
-    this._rosterRows = new Map(); // 按周期缓存名单
-    this._pool = null;
+    this._pools = new Map();
+    this._rosters = new Map();
     this._tmdbIndex = tmdbIndex;
-  }
-
-  /** 选片后的片池（懒加载） */
-  get pool() {
-    if (!this._pool) {
-      let list = seriesOfEarly(this.library, this.channel, this._tmdbIndex);
-      const wanted = this.channel.grid.pool;
-      if (wanted && wanted.length > 0) {
-        const byId = new Map(list.map((s) => [s.id, s]));
-        const picked = [];
-        for (const sel of wanted) {
-          for (const s of this.library.resolve(sel)) if (byId.has(s.id)) picked.push(s);
-        }
-        if (picked.length > 0) list = [...new Map(picked.map((s) => [s.id, s])).values()];
-      }
-      this._pool = list;
-    }
-    return this._pool;
   }
 
   get anchorMs() {
@@ -152,42 +163,61 @@ export class ChannelTimeline {
     return this._anchorDay;
   }
 
-  /** 某一时刻所属的「播出日」序号 */
   dayIndexOf(ms) {
     return localDayIndex(ms - this.dayOffsetMs, this.tz);
   }
 
-  /** 某个播出日的起点 */
   dayStartOf(dayIndex) {
     return dayStartMs(dayIndex, this.tz) + this.dayOffsetMs;
+  }
+
+  /** 某个时段的片池（显式列表优先，否则按该时段的选片条件解析） */
+  poolOf(slotIndex) {
+    if (this._pools.has(slotIndex)) return this._pools.get(slotIndex);
+    const slot = this.channel.slots[slotIndex];
+    let list = resolvePool(this.library, slot.library || {}, this._tmdbIndex);
+    const wanted = slot.grid.pool;
+    if (wanted && wanted.length > 0) {
+      const byId = new Map(list.map((s) => [s.id, s]));
+      const picked = [];
+      for (const sel of wanted) {
+        for (const s of this.library.resolve(sel)) if (byId.has(s.id)) picked.push(s);
+      }
+      if (picked.length > 0) list = [...new Map(picked.map((s) => [s.id, s])).values()];
+    }
+    this._pools.set(slotIndex, list);
+    return list;
   }
 
   #episodesOf(id) {
     return this.library.episodesOf(id) || [];
   }
 
-  #runCycles(series) {
+  #runCycles(series, perSlotEpisodes) {
     const n = this.#episodesOf(series.id).length;
-    return Math.max(1, Math.ceil(n / this.channel.grid.episodes));
+    return Math.max(1, Math.ceil(n / perSlotEpisodes));
   }
 
-  /** 名单模式：第 cycle 轮每个位置由哪部、播第几轮集（总是从第 0 轮推进，保证确定性） */
-  #rosterRow(cycle) {
+  /** 某时段的名单：第 cycle 轮每个位置由哪部、播第几轮集 */
+  #rosterRow(slotIndex, cycle) {
     const target = Math.min(cycle, 5200);
-    if (this._rosterRows.has(target)) return this._rosterRows.get(target);
+    if (!this._rosters.has(slotIndex)) this._rosters.set(slotIndex, new Map());
+    const cache = this._rosters.get(slotIndex);
+    if (cache.has(target)) return cache.get(target);
 
-    const g = this.channel.grid;
-    const pool = this.pool;
+    const slot = this.channel.slots[slotIndex];
+    const g = slot.grid;
+    const pool = this.poolOf(slotIndex);
     const slots = g.perDay * g.cycleDays;
     const queue = pool.slice(slots);
     let qpos = 0;
     let row = pool.slice(0, slots).map((series) => ({ series, start: 0 }));
-    this._rosterRows.set(0, row);
+    cache.set(0, row);
 
     for (let c = 1; c <= target; c++) {
       const inRoster = new Set(row.map((x) => x.series.id));
       row = row.map((seat) => {
-        if (c - seat.start < this.#runCycles(seat.series)) return seat;
+        if (c - seat.start < this.#runCycles(seat.series, g.episodes)) return seat;
         let next = null;
         for (let guard = 0; guard < pool.length * 3; guard++) {
           if (qpos >= queue.length) qpos = 0;
@@ -202,81 +232,93 @@ export class ChannelTimeline {
         inRoster.add(next.id);
         return { series: next, start: c };
       });
-      this._rosterRows.set(c, row);
+      cache.set(c, row);
     }
     return row;
   }
 
-  /** 某一天的排片（含留白） */
+  /** 某一天每个时段排了什么（含留白由 relStart 间隔体现） */
   #buildDay(dayIndex) {
-    const g = this.channel.grid;
-    const pool = this.pool;
-    const day = dayIndex - this.anchorDay;
-    const slots = g.perDay * g.cycleDays;
-    const useRoster = g.cycleDays > 0 && slots > 0 && pool.length > slots;
-
-    const cycleDay = useRoster ? mod(day, g.cycleDays) : 0;
-    const cycleIndex = useRoster ? Math.max(0, Math.floor(day / g.cycleDays)) : 0;
-    const rosterRow = useRoster ? this.#rosterRow(cycleIndex) : null;
-
     const dayStart = this.dayStartOf(dayIndex);
-    const gStart = g.startSec;
-    const offsetSec = mod(gStart - this.channel.dayStartSec, 86400);
+    const day = dayIndex - this.anchorDay;
     const entries = [];
-    let t = offsetSec * 1000; // 相对播出日起点
 
-    for (let j = 0; j < g.perDay && pool.length > 0; j++) {
-      let series;
-      let occurrence;
-      if (useRoster) {
-        const seat = rosterRow[cycleDay * g.perDay + j];
-        if (!seat) continue;
-        series = seat.series;
-        occurrence = cycleIndex - seat.start;
-      } else {
-        const idx = day * g.perDay + j;
-        series = pool[mod(idx, pool.length)];
-        occurrence = Math.floor(idx / pool.length);
-      }
-      const all = this.#episodesOf(series.id);
-      if (all.length === 0) continue;
+    for (const slot of this.channel.slots) {
+      const pool = this.poolOf(slot.index);
+      if (pool.length === 0) continue;
 
-      const totalOcc = Math.max(1, Math.ceil(all.length / g.episodes));
-      const airing = g.loopEpisodes === 'stop' ? Math.max(0, occurrence) : mod(occurrence, totalOcc);
+      const g = slot.grid;
+      const fromOffsetSec = mod(slot.fromSec - this.channel.dayStartSec, 86400);
+      const windowMs = slot.windowSec * 1000;
+      const slotStartAbs = dayStart + fromOffsetSec * 1000;
+      const slotEndAbs = slotStartAbs + windowMs;
+      const rel = mod(g.startSec - slot.fromSec, 86400);
+      const inSlot = rel < slot.windowSec ? rel : 0;
+      let cursor = slotStartAbs + inSlot * 1000;
 
-      const used = new Set();
-      for (let k = 0; k < g.episodes; k++) {
-        let idx = airing * g.episodes + k;
-        if (idx >= all.length) {
-          if (g.loopEpisodes === 'stop') break;
-          idx %= all.length;
+      const slotsCount = g.perDay * g.cycleDays;
+      const useRoster = g.cycleDays > 0 && slotsCount > 0 && pool.length > slotsCount;
+      const cycleDay = useRoster ? mod(day, g.cycleDays) : 0;
+      const cycleIndex = useRoster ? Math.max(0, Math.floor(day / g.cycleDays)) : 0;
+      const rosterRow = useRoster ? this.#rosterRow(slot.index, cycleIndex) : null;
+
+      for (let j = 0; j < g.perDay; j++) {
+        let series;
+        let occurrence;
+        if (useRoster) {
+          const seat = rosterRow[cycleDay * g.perDay + j];
+          if (!seat) continue;
+          series = seat.series;
+          occurrence = cycleIndex - seat.start;
+        } else {
+          const idx = day * g.perDay + j;
+          series = pool[mod(idx, pool.length)];
+          occurrence = Math.floor(idx / pool.length);
         }
-        if (used.has(idx)) break;
-        used.add(idx);
-        const ep = all[idx];
+        const all = this.#episodesOf(series.id);
+        if (all.length === 0) continue;
 
-        entries.push({
-          episode: ep,
-          relStart: t,
-          durationMs: ep.durationMs,
-          truncated: false,
-          segmentLabel: series.displayName,
-        });
-        t += ep.durationMs;
-        // 对齐到下一个网格点，剩下的时间留白
-        const absEnd = dayStart + t;
-        const nextSlot = Math.ceil(absEnd / (g.slotMinutes * 60000)) * g.slotMinutes * 60000;
-        t = nextSlot - dayStart;
+        const totalOcc = Math.max(1, Math.ceil(all.length / g.episodes));
+        const airing = g.loopEpisodes === 'stop' ? Math.max(0, occurrence) : mod(occurrence, totalOcc);
+
+        const used = new Set();
+        for (let k = 0; k < g.episodes; k++) {
+          let idx = airing * g.episodes + k;
+          if (idx >= all.length) {
+            if (g.loopEpisodes === 'stop') break;
+            idx %= all.length;
+          }
+          if (used.has(idx)) break;
+          used.add(idx);
+          const ep = all[idx];
+          if (cursor >= slotEndAbs) break;
+
+          // 活不过时段末尾 → 截断
+          const room = slotEndAbs - cursor;
+          const dur = Math.min(ep.durationMs, room);
+          entries.push({
+            slotIndex: slot.index,
+            episode: ep,
+            relStart: cursor - dayStart,
+            durationMs: dur,
+            truncated: dur < ep.durationMs,
+            segmentLabel: slot.label,
+            seriesName: series.displayName,
+          });
+          cursor += dur;
+          if (dur < ep.durationMs) break;
+
+          // 对齐到下一个网格点
+          const slotMs = g.slotMinutes * 60000;
+          const nextSlot = Math.ceil(cursor / slotMs) * slotMs;
+          cursor = nextSlot;
+        }
       }
     }
 
+    entries.sort((a, b) => a.relStart - b.relStart);
     const last = entries[entries.length - 1];
-    return {
-      dayIndex,
-      dayStart,
-      entries,
-      totalMs: last ? last.relStart + last.durationMs : 0,
-    };
+    return { dayIndex, dayStart, entries, totalMs: last ? last.relStart + last.durationMs : 0 };
   }
 
   dayPlan(dayIndex) {
@@ -288,7 +330,14 @@ export class ChannelTimeline {
     return plan;
   }
 
-  /** 定位某个时刻在播什么；留空时段返回 { off: true } */
+  #findEntry(plan, nowMs) {
+    for (const e of plan.entries) {
+      const abs = plan.dayStart + e.relStart;
+      if (nowMs >= abs && nowMs < abs + e.durationMs) return e;
+    }
+    return null;
+  }
+
   resolve(nowMs) {
     const day = this.dayIndexOf(nowMs);
     const plan = this.dayPlan(day);
@@ -303,15 +352,6 @@ export class ChannelTimeline {
     return makeOff(this, nextDay.dayStart + first.relStart, first);
   }
 
-  #findEntry(plan, nowMs) {
-    for (const e of plan.entries) {
-      const abs = plan.dayStart + e.relStart;
-      if (nowMs >= abs && nowMs < abs + e.durationMs) return e;
-    }
-    return null;
-  }
-
-  /** 节目单：从 fromMs 起，最多 limit 条或到 toMs 为止（含留空行） */
   schedule(fromMs, toMs, limit = 50) {
     const out = [];
     const pushGap = (from, to) => {
@@ -357,29 +397,29 @@ export class ChannelTimeline {
       mode: 'daily',
       dayEntries: plan.entries.length,
       dayDurationMs: plan.totalMs,
-      poolSeries: this.pool.length,
-      poolEpisodes: this.pool.reduce((a, s) => a + s.episodes.length, 0),
-      grid: this.channel.grid,
+      slotCount: this.channel.slots.length,
+      slots: this.channel.slots.map((s) => ({ label: s.label, from: s.from, to: s.to, pool: this.poolOf(s.index).length })),
+      grid: this.channel.slots[0]?.grid || null,
     };
   }
 }
 
 /* ------------------------------------------------------------------ *
- * 解析结果
+ * 结果
  * ------------------------------------------------------------------ */
 
 function makeResolved(tl, plan, entry, nowMs) {
-  const absStart = plan.dayStart + entry.relStart;
-  const endsAt = absStart + entry.durationMs;
+  const startsAt = plan.dayStart + entry.relStart;
+  const endsAt = startsAt + entry.durationMs;
   return {
     entry,
     episode: entry.episode,
-    startsAt: absStart,
+    startsAt,
     endsAt,
     durationMs: entry.durationMs,
-    offsetMs: Math.max(0, Math.min(entry.durationMs, nowMs - absStart)),
+    offsetMs: Math.max(0, Math.min(entry.durationMs, nowMs - startsAt)),
     remainingMs: Math.max(0, endsAt - nowMs),
-    progress: entry.durationMs > 0 ? Math.max(0, Math.min(1, (nowMs - absStart) / entry.durationMs)) : 0,
+    progress: entry.durationMs > 0 ? Math.max(0, Math.min(1, (nowMs - startsAt) / entry.durationMs)) : 0,
     truncated: Boolean(entry.truncated),
     segmentLabel: entry.segmentLabel,
     channel: tl.channel,
@@ -403,7 +443,6 @@ function makeOff(tl, nextAt, entry) {
   };
 }
 
-/** 复用已解析的剧集对象 */
 export function episodeView(ep) {
   return {
     fileId: ep.fileId,

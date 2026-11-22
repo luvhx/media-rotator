@@ -178,25 +178,30 @@ export function validateSettings(settings, { baseConfig, timezone } = {}) {
       if (ids.has(ch.id)) throw new Error('频道 id 重复：' + ch.id);
       ids.add(ch.id);
       const label = '频道「' + (ch.name || ch.id) + '」';
-      const g = ch.grid;
-      if (!g || typeof g !== 'object') throw new Error(label + ' 缺少时间网格配置');
-      if (!/^\d{1,2}:\d{2}(:\d{2})?$/.test(String(g.start || ''))) {
-        throw new Error(label + ' 的开始时间格式应为 HH:MM');
-      }
-      const num = (key, min, max, fallback) => {
-        if (g[key] === undefined || g[key] === null || g[key] === '') return fallback;
-        const v = Number(g[key]);
-        if (!Number.isFinite(v) || v < min || v > max) {
-          throw new Error(label + ' 的 ' + key + ' 需在 ' + min + '~' + max + ' 之间');
+      const slots = Array.isArray(ch.slots) ? ch.slots : null;
+      if (!slots || slots.length === 0) throw new Error(label + ' 至少需要一个时段');
+      for (const [i, slot] of slots.entries()) {
+        const who = label + ' 第 ' + (i + 1) + ' 个时段';
+        if (!/^\d{1,2}:\d{2}(:\d{2})?$/.test(String(slot.from || ''))) throw new Error(who + ' 的开始时间格式应为 HH:MM');
+        if (!/^\d{1,2}:\d{2}(:\d{2})?$/.test(String(slot.to || ''))) throw new Error(who + ' 的结束时间格式应为 HH:MM');
+        const g = slot.grid;
+        if (!g || typeof g !== 'object') throw new Error(who + ' 缺少时间网格配置');
+        if (!/^\d{1,2}:\d{2}(:\d{2})?$/.test(String(g.start || ''))) throw new Error(who + ' 的网格开始时间格式应为 HH:MM');
+        const num = (key, min, max, fallback) => {
+          if (g[key] === undefined || g[key] === null || g[key] === '') return fallback;
+          const v = Number(g[key]);
+          if (!Number.isFinite(v) || v < min || v > max) {
+            throw new Error(who + ' 的 ' + key + ' 需在 ' + min + '~' + max + ' 之间');
+          }
+          return v;
+        };
+        num('slotMinutes', 5, 180, 30);
+        num('perDay', 1, 48, 3);
+        num('episodes', 1, 48, 2);
+        num('cycleDays', 0, 31, 7);
+        if (g.pool !== undefined && g.pool !== null && !Array.isArray(g.pool)) {
+          throw new Error(who + ' 的编排剧集必须是数组');
         }
-        return v;
-      };
-      num('slotMinutes', 5, 180, 30);
-      num('perDay', 1, 48, 3);
-      num('episodes', 1, 48, 2);
-      num('cycleDays', 0, 31, 7);
-      if (g.pool !== undefined && g.pool !== null && !Array.isArray(g.pool)) {
-        throw new Error(label + ' 的片池必须是数组');
       }
       // 借 normalizeChannel 校验日切、锚点与结构
       normalizeChannel(ch, tz);

@@ -36,7 +36,7 @@ check(state.status === 200, 'GET /api/admin/state', state.status);
 const st = state.data;
 check(typeof st.ready === 'boolean' && typeof st.configured === 'boolean', '状态字段齐全');
 check(Array.isArray(st.channels) && st.channels.length > 0, '频道列表', st.channels.map((c) => c.id).join(','));
-check(Boolean(st.channels[0].grid) && st.channels[0].grid.start, '频道带时间网格配置', JSON.stringify(st.channels[0].grid || {}).slice(0, 60));
+check(Array.isArray(st.channels[0].slots) && st.channels[0].slots.length > 0 && st.channels[0].slots[0].grid, '频道带时段与网格配置', JSON.stringify(st.channels[0].slots?.[0]?.grid || {}).slice(0, 60));
 check(!('password' in (st.config.webdav || {})), '接口不回报 WebDAV 密码');
 check(!('apiKey' in (st.config.tmdb || {})), '接口不回报 TMDB Key');
 
@@ -65,7 +65,7 @@ if (lib.loaded) {
   // 非法编排必须被拒绝
   const bad = await api('/api/admin/preview', {
     method: 'POST',
-    body: { channel: channel.id, hours: 6, settings: { channels: [{ ...channel, anchor: channel.anchor, grid: { ...(channel.grid || {}), start: '99:99' } }] } },
+    body: { channel: channel.id, hours: 6, settings: { channels: [{ ...channel, anchor: channel.anchor, slots: [{ from: '18:00', to: '24:00', grid: { ...(channel.slots?.[0]?.grid || {}), start: '99:99' } }] }] } },
   });
   check(bad.status === 400, '未知规则类型被拒绝', bad.data?.error?.slice(0, 40));
 }
@@ -99,7 +99,7 @@ if (lib.loaded) {
 // 设置校验（dryRun，不落盘）
 const dry = await api('/api/admin/settings', {
   method: 'PUT',
-  body: { dryRun: true, webdav: { baseUrl: st.config.webdav.baseUrl || 'http://example.com/dav' }, channels: st.channels.map((c) => ({ id: c.id, name: c.name, anchor: c.anchor, grid: c.grid })) },
+  body: { dryRun: true, webdav: { baseUrl: st.config.webdav.baseUrl || 'http://example.com/dav' }, channels: st.channels.map((c) => ({ id: c.id, name: c.name, anchor: c.anchor, slots: c.slots })) },
 });
 check(dry.status === 200 && dry.data.dryRun === true, 'POST /api/admin/settings?dryRun 校验通过');
 
@@ -111,13 +111,13 @@ check(badTz.status === 400, '非法时区被拒绝', badTz.data?.error?.slice(0,
 
 const badGrid = await api('/api/admin/settings', {
   method: 'PUT',
-  body: { dryRun: true, channels: [{ id: 'x', name: 'x', anchor: new Date().toISOString(), grid: { start: '20:00', slotMinutes: 999, perDay: 3, episodes: 2, cycleDays: 7 } }] },
+  body: { dryRun: true, channels: [{ id: 'x', name: 'x', anchor: new Date().toISOString(), slots: [{ from: '18:00', to: '24:00', grid: { start: '20:00', slotMinutes: 999, perDay: 3, episodes: 2, cycleDays: 7 } }] }] },
 });
 check(badGrid.status === 400, '非法网格参数被拒绝', badGrid.data?.error?.slice(0, 40));
 
 const noGrid = await api('/api/admin/settings', {
   method: 'PUT',
-  body: { dryRun: true, channels: [{ id: 'y', name: 'y', anchor: new Date().toISOString() }] },
+  body: { dryRun: true, channels: [{ id: 'y', name: 'y', anchor: new Date().toISOString(), slots: [] }] },
 });
 check(noGrid.status === 400, '缺网格配置被拒绝', noGrid.data?.error?.slice(0, 40));
 

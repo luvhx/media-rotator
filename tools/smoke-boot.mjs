@@ -26,7 +26,7 @@ function writeConfig(channels) {
   fs.writeFileSync(path.join(tmp, 'config.json'), JSON.stringify(config, null, 2));
 }
 writeConfig([
-  { id: 'main', name: '主线', anchor: '2026-11-23T00:00:00+08:00', grid: { start: '20:00', slotMinutes: 30, perDay: 3, episodes: 2, cycleDays: 7 } },
+  { id: 'main', name: '主线', anchor: '2026-11-23T00:00:00+08:00', slots: [{ from: '18:00', to: '24:00', label: '黄金档', grid: { start: '20:00', slotMinutes: 30, perDay: 3, episodes: 2, cycleDays: 7 } }] },
 ]);
 
 let fails = 0;

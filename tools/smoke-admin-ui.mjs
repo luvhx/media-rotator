@@ -292,7 +292,9 @@ const nums = inputs.filter((i) => typeOf(i) === 'number');
 const times = inputs.filter((i) => typeOf(i) === 'time');
 check(times.length >= 2, '网格表单：日切与开始时间', times.length + ' 个时间框');
 check(nums.length >= 4, '网格表单：部数/集数/周期', nums.length + ' 个数字框');
-check(q('channelEditor').querySelectorAll('textarea').length >= 1, '网格表单：片池输入框');
+check(q('channelEditor').querySelectorAll('.slot-card').length >= 1, '编排：时段卡片');
+check(q('channelEditor').querySelectorAll('.pool-item').length >= 0, '编排：剧集列表区');
+check(Boolean(q('channelEditor').querySelector('.pool-search-panel') || q('channelEditor').textContent.includes('添加剧集')), '编排：可添加剧集');
 
 // 切到预览
 tabs[4].dispatch('click');

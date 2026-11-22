@@ -268,15 +268,41 @@ export function createApp(baseConfig) {
     } catch (err) {
       error = err.message;
     }
+    let slots = [];
+    try {
+      const tl = getTimeline(def.id);
+      slots = def.slots.map((slot, i) => {
+        const pool = tl.poolOf(i);
+        return {
+          from: slot.from,
+          to: slot.to,
+          label: slot.label,
+          grid: slot.grid,
+          library: slot.library || {},
+          explicit: Boolean(slot.grid.pool),
+          poolCount: pool.length,
+          poolNames: pool.map((s) => s.displayName),
+        };
+      });
+    } catch {
+      slots = (def.slots || []).map((slot) => ({
+        from: slot.from,
+        to: slot.to,
+        label: slot.label,
+        grid: slot.grid,
+        library: slot.library || {},
+        explicit: Boolean(slot.grid.pool),
+        poolCount: 0,
+        poolNames: [],
+      }));
+    }
     return {
       id: def.id,
       name: def.name,
       description: def.description || '',
-      mode: def.mode,
       dayStart: def.dayStart || '00:00',
       anchor: new Date(def.anchorMs).toISOString(),
-      grid: def.grid,
-      library: def.library || {},
+      slots,
       stats,
       error,
     };
@@ -637,6 +663,28 @@ export function createApp(baseConfig) {
       state.scan.error = err.message;
       throw err;
     }
+  }
+
+  function apiAdminResolvePool(body) {
+    const draft = body && typeof body === 'object' ? body : {};
+    const settingsDraft = { ...state.settings, ...(draft.settings || {}) };
+    if (draft.channels) settingsDraft.channels = draft.channels;
+    if (draft.selection) settingsDraft.selection = draft.selection;
+    const merged = applySettings(state.baseConfig, settingsDraft);
+    merged.channels = (merged.channels || []).map((ch) => withSelection(ch, merged.selection));
+    const cfg = finalizeConfig(merged, state.baseConfig.__root, { allowIncomplete: true });
+    const def = cfg.channels.find((c) => c.id === draft.channelId);
+    if (!def) throw new HttpError(404, `频道不存在：${draft.channelId}`);
+    const tl = new ChannelTimeline({ channel: def, library: state.library, tz: cfg.timezone, tmdbIndex: state.tmdbIndex });
+    const idx = Math.max(0, Number(draft.slotIndex) || 0);
+    const pool = tl.poolOf(idx);
+    return {
+      ok: true,
+      slotIndex: idx,
+      explicit: Boolean(def.slots[idx]?.grid?.pool),
+      count: pool.length,
+      series: pool.map((s) => ({ id: s.id, name: s.displayName, episodes: s.episodes.length })),
+    };
   }
 
   function apiAdminPreview(body) {
@@ -1048,6 +1096,7 @@ export function createApp(baseConfig) {
       if (pathname === '/api/admin/settings' && (req.method === 'PUT' || req.method === 'POST')) return await apiAdminSave(req, res);
       if (pathname === '/api/admin/scan' && req.method === 'POST') return await apiAdminScan(req, res);
       if (pathname === '/api/admin/preview' && req.method === 'POST') return json(res, apiAdminPreview(await readJson(req)));
+      if (pathname === '/api/admin/resolve-pool' && req.method === 'POST') return json(res, apiAdminResolvePool(await readJson(req)));
       if (pathname === '/api/admin/series') return await apiAdminSeriesList(url, res);
       if (pathname === '/api/admin/posters') return await apiAdminPosters(url, res);
       if (pathname.startsWith('/api/admin/series/')) {

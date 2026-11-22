@@ -68,7 +68,15 @@ const at = (iso) => Date.parse(iso);
 
 function makeTimeline(grid, extra = {}) {
   return new ChannelTimeline({
-    channel: { id: 'ch', name: '频道', anchor: ANCHOR, grid, ...extra },
+    channel: { id: 'ch', name: '频道', anchor: ANCHOR, slots: [{ from: '00:00', to: '24:00', label: '全天', grid }], ...extra },
+    library,
+    tz: TZ,
+  });
+}
+
+function makeSlots(slots, extra = {}) {
+  return new ChannelTimeline({
+    channel: { id: 'ch', name: '频道', anchor: ANCHOR, slots, ...extra },
     library,
     tz: TZ,
   });
@@ -81,7 +89,7 @@ const starts = (plan) => plan.entries.map((e) => localParts(plan.dayStart + e.re
 
 {
   const ch = normalizeChannel({ id: 'x', name: 'x', grid: { start: '20:00', perDay: 3, episodes: 2 } });
-  check(ch.grid.start === '20:00' && ch.grid.slotMinutes === 30, '默认值补齐', JSON.stringify({ s: ch.grid.slotMinutes, c: ch.grid.cycleDays }));
+  check(ch.slots.length === 1 && ch.slots[0].grid.start === '20:00' && ch.slots[0].grid.slotMinutes === 30, '单网格迁移成一个全天时段', JSON.stringify(ch.slots[0].grid).slice(0, 80));
   check(ch.dayStart === '00:00' && ch.dayStartSec === 0, '默认日切 00:00');
 
   // 旧配置（program + grid 规则）自动迁移
@@ -89,7 +97,8 @@ const starts = (plan) => plan.entries.map((e) => localParts(plan.dayStart + e.re
     id: 'old',
     program: [{ fill: true, rule: { type: 'grid', start: '21:00', slotMinutes: 60, seriesPerDay: 2, episodesPerSeries: 3, cycleDays: 0 } }],
   });
-  check(legacy.grid.start === '21:00' && legacy.grid.perDay === 2 && legacy.grid.episodes === 3 && legacy.grid.cycleDays === 0, '旧配置迁移', JSON.stringify(legacy.grid));
+  const lg = legacy.slots[0].grid;
+  check(lg.start === '21:00' && lg.perDay === 2 && lg.episodes === 3 && lg.cycleDays === 0, '旧 program 配置迁移', JSON.stringify(lg).slice(0, 80));
 
   let threw = false;
   try {
@@ -188,7 +197,59 @@ const starts = (plan) => plan.entries.map((e) => localParts(plan.dayStart + e.re
   check(items.every((i, idx) => idx === 0 || i.startsAt >= items[idx - 1].endsAt), '节目单时间单调递增');
 
   const stats = tl.stats();
-  check(stats.mode === 'daily' && stats.poolSeries === 2, 'stats 可用', JSON.stringify({ day: stats.dayEntries, pool: stats.poolSeries }));
+  check(stats.mode === 'daily' && stats.slotCount === 1 && stats.slots[0].pool === 2, 'stats 可用', JSON.stringify(stats.slots));
+}
+
+
+/* ------------------------- 分时段 ------------------------- */
+
+{
+  // 两个时段：白天 2 部，黄金档 2 部；每个时段自己的片池
+  const tl = makeSlots([
+    { from: '00:00', to: '12:00', label: '白天', grid: { start: '08:00', slotMinutes: 30, perDay: 2, episodes: 2, cycleDays: 0, pool: ['A', 'B'] } },
+    { from: '18:00', to: '24:00', label: '黄金档', grid: { start: '20:00', slotMinutes: 30, perDay: 2, episodes: 2, cycleDays: 0, pool: ['C', 'D'] } },
+  ]);
+  const plan = dayPlan(tl, '2026-11-23T12:00:00+08:00');
+  const labels = plan.entries.map((e) => e.segmentLabel);
+  check(labels.includes('白天') && labels.includes('黄金档'), '分时段：两个时段都参与', labels.join(','));
+
+  const day = plan.entries.filter((e) => e.segmentLabel === '白天');
+  const gold = plan.entries.filter((e) => e.segmentLabel === '黄金档');
+  check(day.length === 4 && gold.length === 4, '分时段：每段各 2 部 × 2 集', `${day.length}/${gold.length}`);
+
+  const daySeries = new Set(day.map((e) => e.episode.seriesName));
+  const goldSeries = new Set(gold.map((e) => e.episode.seriesName));
+  check([...daySeries].every((x) => ['A', 'B'].includes(x)), '分时段：白天用自己的片池', [...daySeries].join(','));
+  check([...goldSeries].every((x) => ['C', 'D'].includes(x)), '分时段：黄金档用自己的片池', [...goldSeries].join(','));
+
+  const p = localParts(plan.dayStart + gold[0].relStart, TZ);
+  check(p.hour === 20 && p.minute === 0, '分时段：黄金档 20:00 开始', `${p.hour}:${String(p.minute).padStart(2, '0')}`);
+
+  // 时段末尾截断：跨到 24:00 的不允许
+  const last = plan.entries[plan.entries.length - 1];
+  check(plan.dayStart + last.relStart + last.durationMs <= plan.dayStart + 86400000, '分时段：不越过当天末尾');
+}
+
+{
+  // 时段筛选条件：pool 为空时用 library 过滤
+  const pooled = new ChannelTimeline({
+    channel: { id: 'f', name: 'f', anchor: ANCHOR, slots: [
+      { from: '00:00', to: '24:00', label: '全部', grid: { start: '20:00', slotMinutes: 30, perDay: 2, episodes: 2, cycleDays: 0 }, library: { series: ['A', 'C'] } },
+    ] },
+    library,
+    tz: TZ,
+  });
+  const names = new Set(dayPlan(pooled, '2026-11-23T12:00:00+08:00').entries.map((e) => e.episode.seriesName));
+  check([...names].every((x) => ['A', 'C'].includes(x)) && names.size === 2, '时段筛选条件生效', [...names].join(','));
+}
+
+/* ------------------------- 时段内的剧集列表 ------------------------- */
+
+{
+  const tl = makeSlots([
+    { from: '00:00', to: '24:00', label: '全部', grid: { start: '20:00', slotMinutes: 30, perDay: 2, episodes: 2, cycleDays: 0, pool: ['B', 'E'] } },
+  ]);
+  check(tl.poolOf(0).map((s) => s.displayName).join(',') === 'B,E', '编排剧集列表按给定顺序', tl.poolOf(0).map((s) => s.displayName).join(','));
 }
 
 console.log(failures === 0 ? '\n自检全部通过 ✓' : `\n${failures} 项失败 ✗`);
