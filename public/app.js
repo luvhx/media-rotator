@@ -577,7 +577,8 @@ function syncAssCanvasSize() {
   canvas.style.width = w + 'px';
   canvas.style.height = h + 'px';
   try {
-    state.jassub?.resize(true);
+    // 显式传尺寸：video.videoWidth 为 0（HEVC 软解缺失/元数据未就绪）时也能按画面尺寸渲染
+    state.jassub?.resize(true, w, h);
   } catch {
     /* ignore */
   }
