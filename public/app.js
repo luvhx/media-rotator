@@ -546,16 +546,15 @@ function syncAssCanvasSize() {
   const rect = videoContentRect();
   const wrap = $('videoWrap');
   if (!canvas || !wrap) return;
+  // 画布交给 JASSUB 管理（它会把 canvas transferControlToOffscreen，之后再改 width/height 会抛错）
   const w = Math.round((rect && rect.width) || wrap.clientWidth || 1280);
   const h = Math.round((rect && rect.height) || wrap.clientHeight || 720);
-  canvas.width = w;
-  canvas.height = h;
   canvas.style.left = ((rect && rect.left) || 0) + 'px';
   canvas.style.top = ((rect && rect.top) || 0) + 'px';
   canvas.style.width = w + 'px';
   canvas.style.height = h + 'px';
   try {
-    state.jassub?.resize(true, w, h);
+    state.jassub?.resize(true);
   } catch {
     /* ignore */
   }
