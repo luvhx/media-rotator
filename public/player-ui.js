@@ -85,7 +85,7 @@ export function mountPlayerUI({ player, videoWrap, state, hooks = {} }) {
     if (!Number.isFinite(d) || d <= 0) return;
     const target = Math.max(0, Math.min(d - 0.3, ratio * d));
     player.currentTime = target;
-    hooks.onSeek?.(target);
+    hooks.onSeek?.(target, true);
     show();
   };
   const ratioFromEvent = (e) => {
@@ -172,7 +172,7 @@ export function mountPlayerUI({ player, videoWrap, state, hooks = {} }) {
       const d = player.duration;
       if (Number.isFinite(d)) {
         player.currentTime = Math.max(0, Math.min(d - 0.3, player.currentTime + delta));
-        hooks.onSeek?.(player.currentTime);
+        hooks.onSeek?.(player.currentTime, true);
         flashCenter(delta > 0 ? '» 10s' : '« 10s');
         show();
       }
@@ -200,7 +200,7 @@ export function mountPlayerUI({ player, videoWrap, state, hooks = {} }) {
         e.preventDefault();
         if (Number.isFinite(d)) {
           player.currentTime = Math.max(0, player.currentTime - 10);
-          hooks.onSeek?.(player.currentTime);
+          hooks.onSeek?.(player.currentTime, true);
         }
         show();
         break;
@@ -208,7 +208,7 @@ export function mountPlayerUI({ player, videoWrap, state, hooks = {} }) {
         e.preventDefault();
         if (Number.isFinite(d)) {
           player.currentTime = Math.min(d - 0.3, player.currentTime + 10);
-          hooks.onSeek?.(player.currentTime);
+          hooks.onSeek?.(player.currentTime, true);
         }
         show();
         break;

@@ -1026,7 +1026,9 @@ if (!USE_NATIVE_UI) {
       videoWrap: $('videoWrap'),
       state,
       hooks: {
-        onSeek: () => enterShift(),
+        onSeek: (t, userInitiated) => {
+          if (userInitiated) enterShift();
+        },
         onGoLive: () => goLive(),
         onToggleCC: () => toggleSubtitles(),
         onStatus: (msg) => setStatus(msg),
