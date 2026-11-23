@@ -850,6 +850,28 @@ document.addEventListener('fullscreenchange', async () => {
 });
 document.addEventListener('webkitfullscreenchange', renderCue);
 
+// 全屏按钮：默认隐藏，鼠标移动 / 触摸时出现，2.5 秒后自动淡出
+let fsHideTimer = null;
+function showFsBtn() {
+  const btn = $('fsBtn');
+  if (!btn) return;
+  btn.classList.add('show');
+  clearTimeout(fsHideTimer);
+  fsHideTimer = setTimeout(() => btn.classList.remove('show'), 2500);
+}
+(function bindFsAutoHide() {
+  const wrap = $('videoWrap');
+  if (!wrap) return;
+  wrap.addEventListener('mousemove', showFsBtn);
+  wrap.addEventListener('pointerdown', showFsBtn);
+  wrap.addEventListener('touchstart', showFsBtn, { passive: true });
+  wrap.addEventListener('focusin', showFsBtn);
+  wrap.addEventListener('mouseleave', () => {
+    clearTimeout(fsHideTimer);
+    $('fsBtn')?.classList.remove('show');
+  });
+})();
+
 // 全屏按钮：全屏的是「播放器容器」，这样字幕层和按钮都在画面里
 $('fsBtn')?.addEventListener('click', async () => {
   const wrap = $('videoWrap');
