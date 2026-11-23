@@ -7,6 +7,21 @@
  *   支持「回看」：拖动进度后进入回看状态，点「回到直播」回到时间轴位置
  */
 
+
+/* ------------------------------ 图标 ------------------------------ */
+const svg = (body) =>
+  `<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${body}</svg>`;
+const ICONS = {
+  play: svg('<path d="M8 5.5v13l11-6.5z" fill="currentColor" stroke="none"/>'),
+  pause: svg('<path d="M8 5v14M16 5v14"/>'),
+  volume: svg('<path d="M4 9.5h3l4-3.5v12l-4-3.5H4z"/><path d="M15.5 9a4 4 0 0 1 0 6"/><path d="M18 6.5a7.5 7.5 0 0 1 0 11"/>'),
+  mute: svg('<path d="M4 9.5h3l4-3.5v12l-4-3.5H4z"/><path d="M15 9.5l5 5M20 9.5l-5 5"/>'),
+  cc: svg('<rect x="3" y="6" width="18" height="12" rx="2.5"/><path d="M10.5 10.5a2 2 0 1 0 0 3"/><path d="M16 10.5a2 2 0 1 0 0 3"/>'),
+  pip: svg('<rect x="3" y="5" width="18" height="14" rx="2.5"/><rect x="12.5" y="11.5" width="7" height="6" rx="1.5" fill="currentColor" stroke="none"/>'),
+  fullscreen: svg('<path d="M8.5 4H5a1 1 0 0 0-1 1v3.5"/><path d="M15.5 4H19a1 1 0 0 1 1 1v3.5"/><path d="M8.5 20H5a1 1 0 0 1-1-1v-3.5"/><path d="M15.5 20H19a1 1 0 0 0 1-1v-3.5"/>'),
+  fullscreenExit: svg('<path d="M9.5 4v4.5H5"/><path d="M14.5 4v4.5H19"/><path d="M9.5 20v-4.5H5"/><path d="M14.5 20v-4.5H19"/>'),
+};
+
 const FMT = (s) => {
   if (!Number.isFinite(s) || s < 0) return '--:--';
   const m = Math.floor(s / 60);
@@ -40,6 +55,12 @@ export function mountPlayerUI({ player, videoWrap, state, hooks = {} }) {
   };
 
   if (typeof player.controls === 'boolean') player.controls = false;
+  // 统一图标风格（线性 SVG）
+  if (el.play) el.play.innerHTML = ICONS.play;
+  if (el.mute) el.mute.innerHTML = ICONS.volume;
+  if (el.cc) el.cc.innerHTML = ICONS.cc;
+  if (el.pip) el.pip.innerHTML = ICONS.pip;
+  if (el.fs) el.fs.innerHTML = ICONS.fullscreen;
   ui.classList.remove('hidden-ui');
 
   const persistUi = typeof location !== 'undefined' && new URLSearchParams(location.search).has('ui');
@@ -116,7 +137,7 @@ export function mountPlayerUI({ player, videoWrap, state, hooks = {} }) {
 
   /* ------------------------------- 音量 -------------------------------- */
   const syncVolume = () => {
-    if (el.mute) el.mute.textContent = player.muted || player.volume === 0 ? '🔇' : '🔊';
+    if (el.mute) el.mute.innerHTML = player.muted || player.volume === 0 ? ICONS.mute : ICONS.volume;
     if (el.vol) el.vol.value = String(player.muted ? 0 : player.volume);
   };
   /**
@@ -169,6 +190,9 @@ export function mountPlayerUI({ player, videoWrap, state, hooks = {} }) {
     show();
   };
   el.fs?.addEventListener('click', toggleFullscreen);
+  document.addEventListener('fullscreenchange', () => {
+    if (el.fs) el.fs.innerHTML = document.fullscreenElement ? ICONS.fullscreenExit : ICONS.fullscreen;
+  });
 
   /* ------------------------------- 回看 -------------------------------- */
   el.goLive?.addEventListener('click', () => {
@@ -177,31 +201,18 @@ export function mountPlayerUI({ player, videoWrap, state, hooks = {} }) {
   });
 
   /* ---------------------------- 手势与快捷键 ---------------------------- */
-  let lastTap = 0;
-  let tapX = 0;
-  videoWrap?.addEventListener('click', (e) => {
+  // 单击画面不再暂停（避免误触）；双击左/右两侧快退、快进 10 秒
+  videoWrap?.addEventListener('dblclick', (e) => {
     if (e.target.closest('.player-ui') || e.target.closest('.cc-btn')) return;
-    const now = Date.now();
     const rect = videoWrap.getBoundingClientRect();
     const x = e.clientX - rect.left;
-    if (now - lastTap < 320 && Math.abs(x - tapX) < 60) {
-      // 双击：左右两侧快退/快进 10 秒
-      const delta = x < rect.width / 2 ? -10 : 10;
-      const d = player.duration;
-      if (Number.isFinite(d)) {
-        player.currentTime = Math.max(0, Math.min(d - 0.3, player.currentTime + delta));
-        hooks.onSeek?.(player.currentTime, true);
-        flashCenter(delta > 0 ? '» 10s' : '« 10s');
-        show();
-      }
-      lastTap = 0;
-      return;
-    }
-    lastTap = now;
-    tapX = x;
-    setTimeout(() => {
-      if (lastTap === now) togglePlay();
-    }, 330);
+    const delta = x < rect.width / 2 ? -10 : 10;
+    const d = player.duration;
+    if (!Number.isFinite(d)) return;
+    player.currentTime = Math.max(0, Math.min(d - 0.3, player.currentTime + delta));
+    hooks.onSeek?.(player.currentTime, true);
+    flashCenter(delta > 0 ? '+10s' : '-10s');
+    show();
   });
 
   document.addEventListener('keydown', (e) => {
@@ -328,7 +339,7 @@ export function mountPlayerUI({ player, videoWrap, state, hooks = {} }) {
         el.cc.hidden = !info.hasCC;
         el.cc.classList.toggle('on', Boolean(info.ccOn));
       }
-      if (el.play) el.play.textContent = player.paused ? '▶' : '⏸';
+      if (el.play) el.play.innerHTML = player.paused ? ICONS.play : ICONS.pause;
       if (el.spinner) el.spinner.hidden = player.readyState >= 2 || player.paused;
     },
     setSpinner(visible) {
