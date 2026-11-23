@@ -242,11 +242,11 @@ export class SubtitleService {
 
   async #fromEmbedded(ep) {
     if (!(await this.detectFfmpeg())) return null;
-    const out = await this.#runFfmpeg(ep);
-    if (!out) return null;
-    const raw = typeof out === 'string' ? out : out.text;
-    if (!raw || !/-->/.test(raw)) return null;
-    return { text: raw, raw, ext: typeof out === 'string' ? 'ass' : out.ext || 'ass', source: 'embedded' };
+    const raw = await this.#runFfmpeg(ep);
+    if (!raw) return null;
+    const text = toVtt(raw, 'ass');
+    if (!/-->/.test(text)) return null;
+    return { text, raw, ext: 'ass', source: 'embedded' };
   }
 
   #runFfmpeg(ep) {
@@ -254,7 +254,7 @@ export class SubtitleService {
     const auth = this.dav.authHeader;
     const args = ['-hide_banner', '-loglevel', 'error', '-nostdin'];
     if (auth) args.push('-headers', `Authorization: ${auth}\r\n`);
-    args.push('-i', url, '-map', '0:s:0', '-f', 'webvtt', '-c:s', 'webvtt', 'pipe:1');
+    args.push('-i', url, '-map', '0:s:0', '-c:s', 'ass', '-f', 'ass', 'pipe:1');
 
     return new Promise((resolve) => {
       const chunks = [];

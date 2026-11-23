@@ -523,6 +523,8 @@ async function ensureAssRenderer(item) {
     });
     state.assFor = item.fileId;
     await state.jassub.ready;
+    syncAssCanvasSize();
+    state.assResizeHandler = () => syncAssCanvasSize();
     $('subtitleLayer').classList.remove('show');
     $('subtitleLayer').innerHTML = '';
     setStatus(fonts.length ? '完整 ASS 渲染已启用' : '完整 ASS 渲染已启用（未找到字体，中文可能不显示）');
@@ -533,6 +535,27 @@ async function ensureAssRenderer(item) {
     state.jassub = null;
     state.assFor = null;
     return false;
+  }
+}
+
+/** 让 libass 画布贴合视频画面（跨域视频无法读帧，必须自己算尺寸） */
+function syncAssCanvasSize() {
+  const canvas = $('assCanvas');
+  const rect = videoContentRect();
+  const wrap = $('videoWrap');
+  if (!canvas || !wrap) return;
+  const w = Math.round((rect && rect.width) || wrap.clientWidth || 1280);
+  const h = Math.round((rect && rect.height) || wrap.clientHeight || 720);
+  canvas.width = w;
+  canvas.height = h;
+  canvas.style.left = ((rect && rect.left) || 0) + 'px';
+  canvas.style.top = ((rect && rect.top) || 0) + 'px';
+  canvas.style.width = w + 'px';
+  canvas.style.height = h + 'px';
+  try {
+    state.jassub?.resize(true, w, h);
+  } catch {
+    /* ignore */
   }
 }
 
@@ -1074,6 +1097,7 @@ if (typeof window !== 'undefined' && window.addEventListener) {
   window.addEventListener('resize', () => {
     state.cueKey = '';
     renderCue();
+    syncAssCanvasSize();
   });
 }
 
