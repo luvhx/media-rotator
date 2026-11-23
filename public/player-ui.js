@@ -42,6 +42,7 @@ export function mountPlayerUI({ player, videoWrap, state, hooks = {} }) {
   if (typeof player.controls === 'boolean') player.controls = false;
   ui.classList.remove('hidden-ui');
 
+  const persistUi = typeof location !== 'undefined' && new URLSearchParams(location.search).has('ui');
   let hideTimer = null;
   let lastVolume = 1;
   let dragging = false;
@@ -49,9 +50,10 @@ export function mountPlayerUI({ player, videoWrap, state, hooks = {} }) {
   const show = (autoHide = true) => {
     ui.classList.add('show');
     clearTimeout(hideTimer);
-    if (autoHide) hideTimer = setTimeout(() => ui.classList.remove('show'), 2600);
+    if (autoHide && !persistUi) hideTimer = setTimeout(() => ui.classList.remove('show'), 2600);
   };
   const hide = () => {
+    if (persistUi) return;
     clearTimeout(hideTimer);
     ui.classList.remove('show');
   };
@@ -246,6 +248,7 @@ export function mountPlayerUI({ player, videoWrap, state, hooks = {} }) {
     videoWrap?.addEventListener(evt, () => show(), { passive: true });
   }
   videoWrap?.addEventListener('mouseleave', () => hide());
+  if (persistUi) ui.classList.add('show');
   player.addEventListener('pause', () => show(false));
   player.addEventListener('play', () => show());
   player.addEventListener('waiting', () => {
