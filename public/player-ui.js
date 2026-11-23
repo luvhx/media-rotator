@@ -65,9 +65,15 @@ export function mountPlayerUI({ player, videoWrap, state, hooks = {} }) {
   };
 
   /* ------------------------------ 播放/暂停 ------------------------------ */
-  const togglePlay = () => {
+  const togglePlay = async () => {
     if (player.paused) {
-      player.play().catch(() => {});
+      state.userPaused = false;
+      state.ignorePauseUntil = 0;
+      try {
+        await player.play();
+      } catch (err) {
+        hooks.onStatus?.('播放失败：' + (err.message || err.name));
+      }
       flashCenter('▶');
     } else {
       player.pause();
@@ -113,9 +119,20 @@ export function mountPlayerUI({ player, videoWrap, state, hooks = {} }) {
     if (el.mute) el.mute.textContent = player.muted || player.volume === 0 ? '🔇' : '🔊';
     if (el.vol) el.vol.value = String(player.muted ? 0 : player.volume);
   };
+  /**
+   * 有些浏览器（尤其 iOS/Safari）对「静音自动播放」的视频解除静音会立刻暂停，
+   * 这里解除静音后补一次 play()，并把这次暂停标记为「非用户暂停」。
+   */
+  const resumeAfterUnmute = () => {
+    state.ignorePauseUntil = Date.now() + 600;
+    if (player.paused && state.started) {
+      player.play().catch(() => {});
+    }
+  };
   el.mute?.addEventListener('click', () => {
     player.muted = !player.muted;
     if (!player.muted && player.volume === 0) player.volume = 1;
+    if (!player.muted) resumeAfterUnmute();
     syncVolume();
     show();
   });
@@ -123,6 +140,7 @@ export function mountPlayerUI({ player, videoWrap, state, hooks = {} }) {
     const v = Number(el.vol.value);
     player.volume = v;
     player.muted = v === 0;
+    if (!player.muted) resumeAfterUnmute();
     syncVolume();
     show();
   });

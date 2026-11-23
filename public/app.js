@@ -35,6 +35,7 @@ const state = {
       ? new URLSearchParams(location.search).get('ass') !== '0'
       : localStorage.getItem('rotator.sub.ass') === '1',
   jassub: null,
+  ignorePauseUntil: 0,
   assFor: null,
   cues: null,
   cuesFor: null,
@@ -475,6 +476,14 @@ async function ensureAssRenderer(item) {
   if (!canvas) return false;
   try {
     const { default: JASSUB } = await import('./vendor/jassub/jassub.js');
+    // 先自己取 ASS 文本：没有 ASS 源（只有 SRT/内挂）时优雅回落，不让 worker 抛 404
+    const assUrl = new URL(`/subtitle/${item.fileId}?format=ass`, location.href).href;
+    const assRes = await fetch(assUrl, { cache: 'force-cache' });
+    if (!assRes.ok) {
+      setStatus('这一集没有 ASS 源字幕，已改用普通渲染');
+      return false;
+    }
+    const assText = await assRes.text();
     let fonts = [];
     try {
       const list = await (await fetch('/api/fonts')).json();
@@ -500,7 +509,7 @@ async function ensureAssRenderer(item) {
     state.jassub = new JASSUB({
       video: player,
       canvas,
-      subUrl: new URL(`/subtitle/${item.fileId}?format=ass`, location.href).href,
+      subContent: assText,
       workerUrl: base + 'vendor/jassub/worker.js',
       wasmUrl: base + 'vendor/jassub/wasm/jassub-worker.wasm',
       modernWasmUrl: base + 'vendor/jassub/wasm/jassub-worker-modern.wasm',
@@ -1122,6 +1131,12 @@ player.addEventListener('playing', () => {
 
 player.addEventListener('pause', () => {
   if (player.ended || state.switching) return;
+  // 解除静音时某些浏览器会强制暂停，这类暂停不算用户暂停
+  if (state.ignorePauseUntil && Date.now() < state.ignorePauseUntil) {
+    state.userPaused = false;
+    player.play().catch(() => {});
+    return;
+  }
   state.userPaused = true;
   $('liveTag').style.opacity = '0.4';
 });
