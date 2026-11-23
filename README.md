@@ -148,6 +148,13 @@ environment:
 
 ---
 
+## 界面与主题
+
+- 顶栏右上角可切换主题：**朴素（默认）/ 深色 / 浅色**，选择存在 localStorage
+- 品牌名统一为 **Media Rotator**
+- 主题基于 CSS 变量（`--bg / --panel / --line / --text / --accent ...`），
+  播放器（`style.css`）与管理界面（`admin.css`）共用一套命名
+
 ## 播放器
 
 自绘控制条（不用浏览器原生 controls），三端一致：
