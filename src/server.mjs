@@ -450,7 +450,8 @@ export function createApp(baseConfig) {
     const cfg = state.config;
     const ep = state.library.getEpisode(fileId);
     if (!ep) throw new HttpError(404, `未知文件：${fileId}`);
-    if (cfg.stream.mode === 'proxy') {
+    const forceProxy = url.searchParams.get('proxy') === '1';
+    if (forceProxy || cfg.stream.mode === 'proxy') {
       return proxyFile(req, res, { dav: state.dav, relPath: ep.relPath, extraHeaders: cfg.stream.headers }).catch((err) => {
         if (!res.headersSent) json(res, { error: err.message }, 502);
         else res.destroy();
@@ -1185,6 +1186,15 @@ export function createApp(baseConfig) {
         return res.end(result.text);
       }
 
+      if (pathname === '/' || pathname === '/index.html') {
+        if (url.searchParams.get('coi') === '1') {
+          // 跨源隔离：libass(WASM) 需要 SharedArrayBuffer
+          res.setHeader('Cross-Origin-Opener-Policy', 'same-origin');
+          res.setHeader('Cross-Origin-Embedder-Policy', 'require-corp');
+          res.setHeader('Cross-Origin-Resource-Policy', 'same-origin');
+        }
+      }
+
       /* ---- 视频流 ---- */
       if (pathname.startsWith('/stream/')) {
         const fileId0 = pathname.slice('/stream/'.length);
@@ -1193,7 +1203,7 @@ export function createApp(baseConfig) {
           if (!ep) throw new HttpError(404, `未知文件：${fileId0}`);
           await state.remux.refresh(ep);
           const st = state.remux.status(ep);
-          const wantLocal = url.searchParams.get('local') === '1';
+          const wantLocal = url.searchParams.get('local') === '1' || url.searchParams.get('proxy') === '1';
 
           // 已上传到 WebDAV：直接 302 走 CDN，后端零带宽
           if (st.state === 'published' && st.directUrl && !wantLocal) {
@@ -1234,6 +1244,12 @@ export function createApp(baseConfig) {
       if (pathname.startsWith('/api/')) throw new HttpError(404, `未知接口：${pathname}`);
 
       /* ---- 静态资源 ---- */
+      // 跨源隔离会话：libass(WASM) 需要 SharedArrayBuffer；开启后必须同源取流（?proxy=1）
+      if ((pathname === '/' || pathname === '/index.html') && url.searchParams.get('coi') === '1') {
+        res.setHeader('Cross-Origin-Opener-Policy', 'same-origin');
+        res.setHeader('Cross-Origin-Embedder-Policy', 'require-corp');
+        res.setHeader('Cross-Origin-Resource-Policy', 'same-origin');
+      }
       if (pathname === '/admin') {
         res.writeHead(302, { Location: '/admin/' });
         return res.end();

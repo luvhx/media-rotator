@@ -175,8 +175,16 @@ environment:
 
 1. **默认（DOM 渲染）**：服务端把 ASS 解析成带样式的 cue（`?format=json`），播放器自绘。
    支持斜体 / 粗体 / 颜色 / 字号 / `\an` 对齐 / `\pos` 定位 / 换行；跨域视频可用。
-2. **完整样式（libass / WASM）**：勾选面板里的「完整样式」或加 `?ass=1`，用 JASSUB 在 canvas 上渲染原始 ASS，
-   支持卡拉OK逐字、矢量绘图、`\fad` / `\move` 等特效。
+2. **完整样式（libass / WASM）**：用 JASSUB 在 canvas 上渲染原始 ASS，支持卡拉OK逐字、矢量绘图、`\fad` / `\move` 等特效。
+
+   > **需要跨源隔离**：libass 依赖 `SharedArrayBuffer`，而它要求页面开启
+   > `Cross-Origin-Opener-Policy: same-origin` + `Cross-Origin-Embedder-Policy: require-corp`。
+   > COEP 会拦截跨源媒体，所以**视频必须同源**（后端代理），不能走 302 直链。
+   >
+   > 使用方式：面板勾「完整样式」→ 确认切到代理模式（`?coi=1`）→ 页面自动开启跨源隔离
+   > 并走兼容转封装（MKV → MP4），libass 即可工作。
+   >
+   > 代理模式会占用服务器上行带宽；不勾完整样式时一切照旧走 302。
 
    需要字体：
    - 内置 Noto Sans SC / JP 子集（`public/vendor/jassub/fonts/`）

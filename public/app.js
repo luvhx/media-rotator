@@ -61,6 +61,18 @@ import { mountPlayerUI } from './player-ui.js';
 
 const player = $('player');
 
+/** 跨源隔离会话（?coi=1）：视频必须走同源代理，否则 COEP 会拦掉跨源媒体 */
+const COI = typeof location !== 'undefined' && new URLSearchParams(location.search).get('coi') === '1';
+function withParam(url, key, value) {
+  try {
+    const u = new URL(url, typeof location !== 'undefined' ? location.href : 'http://localhost/');
+    u.searchParams.set(key, value);
+    return u.pathname + u.search;
+  } catch {
+    return url;
+  }
+}
+
 /* iOS / iPadOS 上所有浏览器都不支持 MKV 容器，需要走转封装 */
 const IS_APPLE_MOBILE =
   /iPad|iPhone|iPod/.test(navigator.userAgent) ||
@@ -238,7 +250,8 @@ function loadItem(item, announce) {
   state.justLoaded = true;
   state.switching = true;
   state.drift = null;
-  const url = item.streamUrl || `/stream/${item.fileId}`;
+  const rawUrl = item.streamUrl || `/stream/${item.fileId}`;
+  const url = COI ? withParam(rawUrl, 'proxy', '1') : rawUrl;
   if (announce) setStatus(`切换节目：${item.series} S${item.season}E${item.episode}`);
   state.subtitleFor = null;
   applySubtitle(item);
@@ -297,7 +310,7 @@ async function startCompat(item) {
 
   const applyReady = () => {
     hideCompat();
-    player.src = `/stream/${item.fileId}?format=mp4`;
+    player.src = `/stream/${item.fileId}?format=mp4${COI ? '&proxy=1' : ''}`;
     player.load();
     state.justLoaded = true;
     state.loadStartedAt = Date.now();
@@ -893,6 +906,11 @@ function renderEpg() {
   });
 }
 
+if (COI) {
+  // 代理 + 跨源隔离会话：让用户知道当前为什么走服务器
+  setTimeout(() => setStatus('代理模式 · 跨源隔离已开启（完整 ASS 可用）', true), 1500);
+}
+
 function setStatus(text, sticky = false) {
   // 重要提示（错误/回退）在 8 秒内不被常规状态覆盖
   if (!sticky && state.statusUntil && Date.now() < state.statusUntil) return;
@@ -998,10 +1016,10 @@ function renderChannels() {
   const resetEl = $('subReset');
   const assEl = $('subAss');
   if (assEl && !libassSupported()) {
-    assEl.disabled = true;
-    assEl.checked = false;
     const label = assEl.closest('label');
-    if (label) label.title = '需要页面跨源隔离（COOP/COEP）与同源视频（代理模式）才能使用 libass';
+    if (label) {
+      label.title = '完整 ASS 渲染需要切到代理模式（视频经服务器转发）。点击开关会引导切换。';
+    }
   }
 
   const persist = () => {
@@ -1033,6 +1051,19 @@ function renderChannels() {
     redraw();
   });
   assEl?.addEventListener('change', async () => {
+    if (assEl.checked && !libassSupported()) {
+      assEl.checked = false;
+      const ok = typeof confirm === 'function'
+        ? confirm('完整 ASS 渲染（libass）需要页面跨源隔离，视频将改为经服务器代理转发（占用上行带宽）。\n\n现在切换到代理模式？')
+        : false;
+      if (ok && typeof location !== 'undefined') {
+        const u = new URL(location.href);
+        u.searchParams.set('coi', '1');
+        u.searchParams.set('ass', '1');
+        location.href = u.toString();
+      }
+      return;
+    }
     state.subAss = assEl.checked;
     localStorage.setItem('rotator.sub.ass', state.subAss ? '1' : '0');
     const item = state.now?.now;
