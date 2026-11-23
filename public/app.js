@@ -368,7 +368,7 @@ function renderCue() {
   }
   const t = player.currentTime || 0;
   const active = cues.filter((c) => t >= c.start && t < c.end);
-  const key = active.map((c) => c.start + '|' + c.html).join('##');
+  const key = active.map((c) => c.start + '|' + c.html + '|' + (c.pos ? c.pos.x + ',' + c.pos.y : c.align)).join('##');
   if (key === state.cueKey) return;
   state.cueKey = key;
   layer.innerHTML = '';
@@ -376,27 +376,48 @@ function renderCue() {
     layer.classList.remove('show');
     return;
   }
+
   const wrap = $('videoWrap');
   const stageH = (wrap && wrap.clientHeight) || player.clientHeight || 720;
   const meta = state.cuesMeta || { playResX: 1280, playResY: 720 };
+
+  const makeEl = (c) => {
+    const node = document.createElement('div');
+    node.className = 'cue';
+    node.innerHTML = c.html;
+    if (c.size) node.style.fontSize = Math.max(12, (c.size / meta.playResY) * stageH) + 'px';
+    return node;
+  };
+
+  // 同一锚点的多条（双语字幕）纵向堆叠，不能叠在一起
+  const groups = { top: [], middle: [], bottom: [] };
+  const positioned = [];
   for (const c of active) {
-    const el2 = document.createElement('div');
-    el2.className = 'cue';
-    el2.innerHTML = c.html;
     if (c.pos) {
-      el2.classList.add('anchor');
-      el2.style.left = (c.pos.x / meta.playResX) * 100 + '%';
-      el2.style.top = (c.pos.y / meta.playResY) * 100 + '%';
-      el2.style.transform = 'translate(-50%, -50%)';
-    } else {
-      const an = c.align || 2;
-      el2.classList.add(an <= 3 ? 'bottom' : an <= 6 ? 'middle' : 'top');
+      positioned.push(c);
+      continue;
     }
-    if (c.size) el2.style.fontSize = Math.max(12, (c.size / meta.playResY) * stageH) + 'px';
-    layer.append(el2);
+    const an = c.align || 2;
+    groups[an <= 3 ? 'bottom' : an <= 6 ? 'middle' : 'top'].push(c);
+  }
+  for (const [anchor, list] of Object.entries(groups)) {
+    if (list.length === 0) continue;
+    const box = document.createElement('div');
+    box.className = 'cue-group ' + anchor;
+    for (const c of list) box.append(makeEl(c));
+    layer.append(box);
+  }
+  for (const c of positioned) {
+    const node = makeEl(c);
+    node.classList.add('positioned');
+    node.style.left = (c.pos.x / meta.playResX) * 100 + '%';
+    node.style.top = (c.pos.y / meta.playResY) * 100 + '%';
+    node.style.transform = 'translate(-50%, -50%)';
+    layer.append(node);
   }
   layer.classList.add('show');
 }
+
 
 async function loadCues(item) {
   if (state.cuesFor === item.fileId) return;
