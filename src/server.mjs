@@ -1113,11 +1113,48 @@ export function createApp(baseConfig) {
       if (pathname === '/api/admin/tmdb/test' && req.method === 'POST') return await apiAdminTmdbTest(req, res);
 
       /* ---- 字幕 ---- */
+      if (pathname === '/api/fonts') {
+        const dir = path.join(path.dirname(state.config.paths.library), 'fonts');
+        const files = fs.existsSync(dir)
+          ? fs.readdirSync(dir).filter((f) => /\.(woff2?|ttf|otf)$/i.test(f))
+          : [];
+        return json(res, { fonts: files.map((f) => ({ name: f, url: `/fonts/${encodeURIComponent(f)}` })) });
+      }
+
+      if (pathname.startsWith('/fonts/')) {
+        const name = decodeURIComponent(pathname.slice('/fonts/'.length));
+        if (!/^[\w.\-\u4e00-\u9fa5]+\.(woff2?|ttf|otf)$/i.test(name)) throw new HttpError(400, '字体名不合法');
+        const dir = path.join(path.dirname(state.config.paths.library), 'fonts');
+        const file = path.join(dir, name);
+        if (!path.resolve(file).startsWith(path.resolve(dir))) throw new HttpError(400, '路径不合法');
+        if (!fs.existsSync(file)) throw new HttpError(404, '字体不存在');
+        const mime = /\.woff2$/i.test(name) ? 'font/woff2' : /\.woff$/i.test(name) ? 'font/woff' : /\.ttf$/i.test(name) ? 'font/ttf' : 'font/otf';
+        res.writeHead(200, {
+          'Content-Type': mime,
+          'Cache-Control': 'public, max-age=604800',
+          'Access-Control-Allow-Origin': '*',
+        });
+        return res.end(fs.readFileSync(file));
+      }
+
       if (pathname.startsWith('/subtitle/')) {
         if (!subtitleEnabled()) throw new HttpError(404, '字幕功能已关闭');
         const fileId = pathname.slice('/subtitle/'.length);
         const ep = state.library.getEpisode(fileId);
         if (!ep) throw new HttpError(404, `未知文件：${fileId}`);
+        if (url.searchParams.get('format') === 'ass') {
+          const raw = await state.subs.get(ep);
+          if (!raw || !raw.raw || !/^\[script info\]/i.test(raw.raw.trim())) {
+            throw new HttpError(404, '这一集没有 ASS 源字幕');
+          }
+          res.writeHead(200, {
+            'Content-Type': 'text/plain; charset=utf-8',
+            'Cache-Control': 'public, max-age=86400',
+            'Access-Control-Allow-Origin': '*',
+          });
+          return res.end(raw.raw);
+        }
+
         if (url.searchParams.get('format') === 'json') {
           const cues = await state.subs.getCues(ep);
           if (!cues) {

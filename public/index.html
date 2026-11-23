@@ -24,9 +24,34 @@
     <main class="layout">
       <section class="stage">
         <div class="video-wrap" id="videoWrap">
-          <video id="player" playsinline preload="auto" muted controls></video>
+          <video id="player" playsinline preload="auto" muted></video>
 
+          <canvas class="ass-canvas" id="assCanvas" hidden></canvas>
           <div class="subtitle-layer" id="subtitleLayer"></div>
+          <div class="player-ui" id="playerUi">
+            <div class="pu-center" id="puCenter"></div>
+            <div class="pu-spinner" id="puSpinner" hidden></div>
+            <button class="pu-btn pu-big" id="puPlay" title="播放/暂停（空格）">▶</button>
+            <div class="pu-bar">
+              <div class="pu-track" id="puTrack">
+                <div class="pu-buffer" id="puBuffer"></div>
+                <div class="pu-played" id="puPlayed"></div>
+                <div class="pu-live" id="puLiveMark"></div>
+                <div class="pu-knob" id="puKnob"></div>
+              </div>
+              <div class="pu-shift" id="puShift" hidden>
+                <span id="puShiftText">回看中</span>
+                <button class="pu-live-btn" id="puGoLive">回到直播</button>
+              </div>
+            </div>
+            <span class="pu-time" id="puTime">--:--</span>
+            <button class="pu-btn" id="puMute" title="静音（M）">🔊</button>
+            <input class="pu-vol" id="puVol" type="range" min="0" max="1" step="0.05" value="1" title="音量" />
+            <button class="pu-btn" id="puCC" title="字幕（C）">CC</button>
+            <button class="pu-btn" id="puPip" title="画中画" hidden>⧉</button>
+            <button class="pu-btn" id="puFs" title="全屏（F）">⛶</button>
+          </div>
+
           <button class="cc-btn fs-btn" id="fsBtn" title="全屏（字幕一起全屏）">⛶</button>
 
           <div class="overlay" id="overlay">
@@ -70,6 +95,7 @@
             <span class="sub-val" id="subMarginVal">8%</span>
           </label>
           <label class="sub-inline"><input type="checkbox" id="subBg" /> 背景</label>
+          <label class="sub-inline" title="用 libass 完整渲染 ASS（支持卡拉OK/绘图/特效，需要字体）"><input type="checkbox" id="subAss" /> 完整样式</label>
           <button class="link-btn" id="subReset" type="button">重置</button>
         </section>
 

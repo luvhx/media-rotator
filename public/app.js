@@ -30,10 +30,19 @@ const state = {
   subAlign: Number(localStorage.getItem('rotator.sub.align') || 0),
   subMargin: Number(localStorage.getItem('rotator.sub.margin') || 8),
   subBg: localStorage.getItem('rotator.sub.bg') === '1',
+  subAss:
+    typeof location !== 'undefined' && new URLSearchParams(location.search).has('ass')
+      ? new URLSearchParams(location.search).get('ass') !== '0'
+      : localStorage.getItem('rotator.sub.ass') === '1',
+  jassub: null,
+  assFor: null,
   cues: null,
   cuesFor: null,
   cuesMeta: null,
   cueKey: '',
+  shifting: false,
+  liveOffset: null,
+  ui: null,
   subtitleFor: null,
   prefetchedSub: null,
   forceCompat: false,
@@ -46,6 +55,8 @@ const state = {
   fetchPending: false,
   errors: 0,
 };
+
+import { mountPlayerUI } from './player-ui.js';
 
 const player = $('player');
 
@@ -358,9 +369,29 @@ function parseVtt(text) {
 }
 
 /** 按当前播放时间渲染字幕（不依赖 <track>，跨域视频也能显示） */
+/** 视频画面在容器里的真实矩形（扣除上下/左右黑边） */
+function videoContentRect() {
+  const wrap = $('videoWrap');
+  const vw = player.videoWidth;
+  const vh = player.videoHeight;
+  if (!wrap || !vw || !vh) return null;
+  const cw = wrap.clientWidth;
+  const ch = wrap.clientHeight;
+  if (!cw || !ch) return null;
+  const scale = Math.min(cw / vw, ch / vh);
+  const w = vw * scale;
+  const h = vh * scale;
+  return { left: (cw - w) / 2, top: (ch - h) / 2, width: w, height: h };
+}
+
 function renderCue() {
   const layer = $('subtitleLayer');
   if (!layer) return;
+  if (state.jassub) {
+    layer.innerHTML = '';
+    layer.classList.remove('show');
+    return;
+  }
   const cues = state.cues;
   if (!state.subtitleOn || !cues || cues.length === 0) {
     if (state.cueKey !== 'off') {
@@ -383,8 +414,19 @@ function renderCue() {
 
   layer.style.setProperty('--sub-bg', state.subBg ? 'rgba(0, 0, 0, 0.58)' : 'transparent');
 
+  // 字幕层贴住视频画面（宽银幕片源的黑边不再影响字幕位置）
+  const rect = videoContentRect();
+  if (rect) {
+    layer.style.inset = 'auto';
+    layer.style.left = rect.left + 'px';
+    layer.style.top = rect.top + 'px';
+    layer.style.width = rect.width + 'px';
+    layer.style.height = rect.height + 'px';
+  } else {
+    layer.style.inset = '0';
+  }
   const wrap = $('videoWrap');
-  const stageH = (wrap && wrap.clientHeight) || player.clientHeight || 720;
+  const stageH = (rect && rect.height) || (wrap && wrap.clientHeight) || player.clientHeight || 720;
   const meta = state.cuesMeta || { playResX: 1280, playResY: 720 };
 
   const makeEl = (c) => {
@@ -424,12 +466,85 @@ function renderCue() {
 }
 
 
+/** 完整 ASS 渲染（libass/wasm）：开启时用画布渲染，关闭时回到 DOM 渲染 */
+async function ensureAssRenderer(item) {
+  if (!state.subAss || !item?.subtitleUrl) return false;
+  if (typeof location === 'undefined' || typeof Worker === 'undefined') return false;
+  if (state.jassub && state.assFor === item.fileId) return true;
+  const canvas = $('assCanvas');
+  if (!canvas) return false;
+  try {
+    const { default: JASSUB } = await import('./vendor/jassub/jassub.js');
+    let fonts = [];
+    try {
+      const list = await (await fetch('/api/fonts')).json();
+      fonts = (list.fonts || []).map((f) => f.url);
+    } catch {
+      /* 没有字体列表也能跑，只是中文可能缺字 */
+    }
+    if (state.jassub) {
+      try { state.jassub.destroy(); } catch { /* ignore */ }
+      state.jassub = null;
+    }
+    canvas.hidden = false;
+    const base = new URL('.', location.href).href;
+    const builtinFonts = {
+      'noto sans sc': base + 'vendor/jassub/fonts/noto-sans-sc.woff2',
+      'noto sans jp': base + 'vendor/jassub/fonts/noto-sans-jp.woff2',
+    };
+    const availableFonts = { ...builtinFonts };
+    for (const url of fonts) {
+      const name = decodeURIComponent(url.split('/').pop() || '').replace(/\.(woff2?|ttf|otf)$/i, '').replace(/[-_]+/g, ' ').toLowerCase();
+      if (name) availableFonts[name] = url;
+    }
+    state.jassub = new JASSUB({
+      video: player,
+      canvas,
+      subUrl: new URL(`/subtitle/${item.fileId}?format=ass`, location.href).href,
+      workerUrl: base + 'vendor/jassub/worker.js',
+      wasmUrl: base + 'vendor/jassub/wasm/jassub-worker.wasm',
+      modernWasmUrl: base + 'vendor/jassub/wasm/jassub-worker-modern.wasm',
+      wasmWorkerUrl: base + 'vendor/jassub/wasm/jassub-worker.js',
+      modernWasmWorkerUrl: base + 'vendor/jassub/wasm/jassub-worker-modern.js',
+      fonts: [builtinFonts['noto sans sc'], builtinFonts['noto sans jp'], ...fonts],
+      availableFonts,
+      defaultFont: 'noto sans sc',
+      prescaleHeightLimit: 1080,
+      maxRenderHeight: 2160,
+    });
+    state.assFor = item.fileId;
+    await state.jassub.ready;
+    $('subtitleLayer').classList.remove('show');
+    $('subtitleLayer').innerHTML = '';
+    setStatus(fonts.length ? '完整 ASS 渲染已启用' : '完整 ASS 渲染已启用（未找到字体，中文可能不显示）');
+    return true;
+  } catch (err) {
+    setStatus('完整 ASS 渲染失败：' + err.message);
+    canvas.hidden = true;
+    state.jassub = null;
+    state.assFor = null;
+    return false;
+  }
+}
+
+function disableAssRenderer() {
+  if (state.jassub) {
+    try { state.jassub.destroy(); } catch { /* ignore */ }
+  }
+  state.jassub = null;
+  state.assFor = null;
+  const canvas = $('assCanvas');
+  if (canvas) canvas.hidden = true;
+}
+
 async function loadCues(item) {
   if (state.cuesFor === item.fileId) return;
   state.cuesFor = item.fileId;
   state.cues = null;
   state.cueKey = '';
   state.cuesMeta = null;
+  if (await ensureAssRenderer(item)) return;
+  disableAssRenderer();
   try {
     const target = item.subtitleJsonUrl || item.subtitleUrl;
     const url = new URL(target, typeof location !== 'undefined' ? location.href : 'http://localhost/');
@@ -475,6 +590,7 @@ function applySubtitle(item) {
     layer.innerHTML = '';
   }
   if (!item || !item.subtitleUrl) {
+    disableAssRenderer();
     syncSubtitlePanel(null);
     state.subtitleFor = item?.fileId || null;
     state.cues = null;
@@ -559,6 +675,30 @@ function targetTime(item, nowMs) {
   return clamp(byOffset, 0, hasDuration ? d - 0.4 : byOffset);
 }
 
+/** 用户拖动进度 / 双击快进：进入回看状态，暂停自动纠偏 */
+function enterShift() {
+  if (!state.started) return;
+  state.shifting = true;
+  setStatus('回看中 · 点「回到直播」恢复');
+}
+
+/** 回到直播位置 */
+function goLive() {
+  state.shifting = false;
+  state.justLoaded = true;
+  state.lastSeekAt = 0;
+  const item = state.now?.now;
+  if (item) {
+    const target = targetTime(item, serverNow());
+    try {
+      player.currentTime = target;
+    } catch {
+      /* ignore */
+    }
+  }
+  setStatus('已回到直播');
+}
+
 function tick() {
   renderCue();
   const item = state.now?.now;
@@ -593,7 +733,19 @@ function tick() {
     return;
   }
 
-  if (state.started && player.readyState >= 1 && !state.userPaused) {
+  // 自绘控制条：更新进度/直播标记/回看状态
+  const liveOffset = targetTime(item, nowMs);
+  state.liveOffset = liveOffset;
+  const shiftSeconds = player.currentTime - liveOffset;
+  state.ui?.update({
+    liveOffset,
+    shifting: state.shifting,
+    shiftSeconds,
+    hasCC: Boolean(item.subtitleUrl),
+    ccOn: state.subtitleOn,
+  });
+
+  if (state.started && player.readyState >= 1 && !state.userPaused && !state.shifting) {
     const target = targetTime(item, nowMs);
     const drift = player.currentTime - target;
     state.drift = drift;
@@ -788,6 +940,7 @@ function renderChannels() {
   const bgEl = $('subBg');
   const enabledEl = $('subEnabled');
   const resetEl = $('subReset');
+  const assEl = $('subAss');
 
   const persist = () => {
     localStorage.setItem('rotator.sub.size', String(state.subSize));
@@ -800,6 +953,7 @@ function renderChannels() {
     renderCue();
   };
   const sync = () => {
+    if (assEl) assEl.checked = state.subAss;
     if (sizeEl) sizeEl.value = String(state.subSize);
     if (alignEl) alignEl.value = String(state.subAlign);
     if (marginEl) marginEl.value = String(state.subMargin);
@@ -815,6 +969,24 @@ function renderChannels() {
     if (marginVal) marginVal.textContent = state.subMargin + '%';
     persist();
     redraw();
+  });
+  assEl?.addEventListener('change', async () => {
+    state.subAss = assEl.checked;
+    localStorage.setItem('rotator.sub.ass', state.subAss ? '1' : '0');
+    const item = state.now?.now;
+    if (state.subAss) {
+      if (!(await ensureAssRenderer(item))) {
+        assEl.checked = false;
+        state.subAss = false;
+        localStorage.setItem('rotator.sub.ass', '0');
+        state.cueKey = '';
+        renderCue();
+      }
+    } else {
+      disableAssRenderer();
+      state.cueKey = '';
+      renderCue();
+    }
   });
   bgEl?.addEventListener('change', () => { state.subBg = bgEl.checked; persist(); redraw(); });
   enabledEl?.addEventListener('change', () => toggleSubtitles(enabledEl.checked));
@@ -835,6 +1007,34 @@ function renderChannels() {
 
 /* ------------------------------ 事件 ------------------------------ */
 
+// 自绘播放器（?native=1 时保留原生控件）
+const USE_NATIVE_UI = typeof location !== 'undefined' && new URLSearchParams(location.search).has('native');
+if (!USE_NATIVE_UI) {
+  try {
+    state.ui = mountPlayerUI({
+      player,
+      videoWrap: $('videoWrap'),
+      state,
+      hooks: {
+        onSeek: () => enterShift(),
+        onGoLive: () => goLive(),
+        onToggleCC: () => toggleSubtitles(),
+        onStatus: (msg) => setStatus(msg),
+        onUserPauseChange: (paused) => {
+          if (!paused) state.userPaused = false;
+        },
+      },
+    });
+  } catch (err) {
+    console.warn('自定义控制条加载失败，退回原生控件', err);
+    player.controls = true;
+  }
+} else {
+  player.controls = true;
+  $('playerUi')?.classList.add('hidden-ui');
+}
+
+
 // 原生「全屏视频」会把 DOM 覆盖层挡掉：改成全屏整个播放器容器
 const videoWrap = $('videoWrap');
 document.addEventListener('fullscreenchange', async () => {
@@ -849,39 +1049,13 @@ document.addEventListener('fullscreenchange', async () => {
   renderCue();
 });
 document.addEventListener('webkitfullscreenchange', renderCue);
-
-// 全屏按钮：默认隐藏，鼠标移动 / 触摸时出现，2.5 秒后自动淡出
-let fsHideTimer = null;
-function showFsBtn() {
-  const btn = $('fsBtn');
-  if (!btn) return;
-  btn.classList.add('show');
-  clearTimeout(fsHideTimer);
-  fsHideTimer = setTimeout(() => btn.classList.remove('show'), 2500);
-}
-(function bindFsAutoHide() {
-  const wrap = $('videoWrap');
-  if (!wrap) return;
-  wrap.addEventListener('mousemove', showFsBtn);
-  wrap.addEventListener('pointerdown', showFsBtn);
-  wrap.addEventListener('touchstart', showFsBtn, { passive: true });
-  wrap.addEventListener('focusin', showFsBtn);
-  wrap.addEventListener('mouseleave', () => {
-    clearTimeout(fsHideTimer);
-    $('fsBtn')?.classList.remove('show');
+if (typeof window !== 'undefined' && window.addEventListener) {
+  window.addEventListener('resize', () => {
+    state.cueKey = '';
+    renderCue();
   });
-})();
+}
 
-// 全屏按钮：全屏的是「播放器容器」，这样字幕层和按钮都在画面里
-$('fsBtn')?.addEventListener('click', async () => {
-  const wrap = $('videoWrap');
-  try {
-    if (document.fullscreenElement) await document.exitFullscreen();
-    else if (wrap?.requestFullscreen) await wrap.requestFullscreen();
-  } catch (err) {
-    setStatus('这个浏览器不支持全屏容器：' + err.message);
-  }
-});
 
 
 
