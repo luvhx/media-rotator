@@ -3,7 +3,7 @@
  * 字幕转换自检（不联网）
  *   node tools/selftest-subtitles.mjs
  */
-import { assToVtt, srtToVtt, toVtt, assTimeToVtt, cleanAssText } from '../src/subtitles.mjs';
+import { assToVtt, srtToVtt, toVtt, assTimeToVtt, cleanAssText , assToCues, vttToCues } from '../src/subtitles.mjs';
 
 let fails = 0;
 const check = (ok, msg, extra = '') => {
@@ -74,6 +74,48 @@ check(toVtt(srt, 'txt').startsWith('WEBVTT'), '未知扩展名兜底为 VTT');
 /* ---------------- 空输入 ---------------- */
 check(assToVtt('').trim() === 'WEBVTT', '空 ASS 不炸');
 check(srtToVtt('').trim() === 'WEBVTT', '空 SRT 不炸');
+
+/* ---------------- ASS 样式（assToCues） ---------------- */
+
+const styledAss = `[Script Info]
+PlayResX: 1920
+PlayResY: 1080
+
+[V4+ Styles]
+Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
+Style: Default,Microsoft YaHei,72,&H00FFFFFF,&H000000FF,&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,3,1,2,10,10,40,1
+Style: Top,Yu Gothic,64,&H0000FFFF,&H000000FF,&H00000000,&H00000000,1,0,0,0,100,100,0,0,1,3,1,8,10,10,40,1
+
+[Events]
+Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
+Dialogue: 0,0:00:01.00,0:00:04.00,Default,,0,0,0,,{\\i1}斜体{\\i0} 正常
+Dialogue: 0,0:00:05.00,0:00:08.00,Top,,0,0,0,,顶部标题
+Dialogue: 0,0:00:09.00,0:00:12.00,Default,,0,0,0,,{\\pos(960,900)\\c&H0000FF&}红字定位
+Dialogue: 0,0:00:13.00,0:00:16.00,Default,,0,0,0,,{\\p1}m 0 0 l 100 0 100 100 0 100{\\p0}画完了
+`;
+
+const styled = assToCues(styledAss);
+check(styled.playResX === 1920 && styled.playResY === 1080, 'ASS：解析分辨率', styled.playResX + 'x' + styled.playResY);
+check(styled.cues.length === 4, 'ASS：cue 数', styled.cues.length);
+
+const c1 = styled.cues[0];
+check(c1.html.includes('<i>斜体</i>'), 'ASS：斜体保留');
+check(c1.size === 72, 'ASS：样式字号', c1.size);
+check(c1.html.includes('color:#FFFFFF'), 'ASS：默认颜色');
+
+const c2 = styled.cues[1];
+check(c2.align === 8, 'ASS：\\an 对齐', c2.align);
+check(c2.html.includes('<b>'), 'ASS：样式粗体');
+
+const c3 = styled.cues[2];
+check(c3.pos && c3.pos.x === 960 && c3.pos.y === 900, 'ASS：\\pos 定位', JSON.stringify(c3.pos));
+check(c3.html.includes('#FF0000'), 'ASS：内联颜色', c3.html.match(/color:[^"]+/)?.[0]);
+
+const c4 = styled.cues[3];
+check(!/\bm 0 0\b/.test(c4.html) && c4.html.includes('画完了'), 'ASS：丢弃矢量绘图保留文字', c4.html);
+
+const plain = vttToCues('WEBVTT\n\n00:00:01.000 --> 00:00:02.000\n纯文本\n');
+check(plain.cues.length === 1 && plain.cues[0].html === '纯文本', 'VTT → cue 兜底');
 
 console.log(fails === 0 ? '\n字幕转换自检通过 ✓' : `\n${fails} 项失败 ✗`);
 process.exit(fails ? 1 : 0);

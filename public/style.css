@@ -564,26 +564,6 @@ a.ghost.link {
   color: var(--accent, #6ea8fe);
 }
 
-/* JS 渲染的字幕层：不依赖 <track>，跨域视频也能显示 */
-.subtitle-layer {
-  position: absolute;
-  left: 4%;
-  right: 4%;
-  bottom: 9%;
-  z-index: 6;
-  text-align: center;
-  white-space: pre-line;
-  pointer-events: none;
-  font-size: clamp(16px, 2.2vw, 30px);
-  line-height: 1.45;
-  font-weight: 600;
-  color: #fff;
-  text-shadow: 0 0 4px #000, 0 2px 8px rgba(0, 0, 0, 0.95), 0 0 2px rgba(0, 0, 0, 0.9);
-  paint-order: stroke fill;
-  -webkit-text-stroke: 1px rgba(0, 0, 0, 0.35);
-  display: none;
-}
-.subtitle-layer.show { display: block; }
 
 
 /* 播放器内的字幕开关（全屏也可见） */
@@ -608,3 +588,32 @@ a.ghost.link {
 .cc-btn[hidden] { display: none; }
 
 .cc-btn.fs-btn { right: 68px; min-width: 40px; }
+
+/* JS 渲染的字幕层（支持 ASS 样式：颜色/斜体/字号/对齐/定位） */
+.subtitle-layer {
+  position: absolute;
+  inset: 0;
+  z-index: 6;
+  pointer-events: none;
+  display: none;
+  overflow: hidden;
+}
+.subtitle-layer.show { display: block; }
+.subtitle-layer .cue {
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 92%;
+  text-align: center;
+  white-space: pre-line;
+  font-size: 26px;
+  line-height: 1.4;
+  font-weight: 600;
+  color: #fff;
+  text-shadow: 0 0 4px #000, 0 2px 8px rgba(0, 0, 0, 0.95), 0 0 2px rgba(0, 0, 0, 0.9);
+  paint-order: stroke fill;
+  -webkit-text-stroke: 1px rgba(0, 0, 0, 0.35);
+}
+.subtitle-layer .cue.bottom { bottom: 9%; }
+.subtitle-layer .cue.middle { top: 50%; transform: translate(-50%, -50%); }
+.subtitle-layer .cue.top { top: 8%; }

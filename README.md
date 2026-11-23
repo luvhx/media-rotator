@@ -37,7 +37,7 @@ WebDAV 媒体库 ──scan──> data/library.json（含每集真实时长）
 | Web 管理界面 | `/admin` 里改配置、勾选节目、可视化编辑编排、实时预览节目单，改完即生效 |
 | TMDB 元数据 | 封面、简介、评分、年份、类型、播出信息；自动按中文名匹配，可手动纠正 |
 | TMDB 筛选 | 按年份 / 评分 / 类型 / 匹配状态筛选节目库，也能作为频道的选片条件 |
-| 字幕自动加载 | 外挂 `.ass/.srt` 与 MKV 内挂字幕统一转 WebVTT 挂到 `<track>`，可一键开关 |
+| 字幕与 ASS 样式 | 外挂 `.ass/.srt` 与 MKV 内挂字幕；ASS 的斜体/粗体/颜色/字号/对齐/`\pos` 定位一并还原，播放器自绘（不依赖 `<track>`，跨域视频可用） |
 | 兼容模式 | MKV 按需转封装成 MP4（视频流复制 + 音频 AAC + `hvc1`），解决 iOS/Safari 完全放不了 MKV 的问题 |
 
 ---
@@ -150,23 +150,34 @@ environment:
 
 ## 字幕
 
-浏览器只认 WebVTT（MKV 里的 ASS 基本不支持），所以后端统一转码后挂到 `<track>`：
+- 外挂字幕：与视频同目录的 `.ass` / `.ssa` / `.srt` / `.vtt`
+- 内挂字幕：MKV 里的字幕轨（需要 ffmpeg 镜像，首次抽取后会缓存到 `data/subs/`）
+- 播放器右上角的 **CC** 和页脚的 **字幕** 按钮都能开关，状态存在 localStorage
 
-| 来源 | 处理方式 | 需要的镜像 |
-| --- | --- | --- |
-| 外挂 `.ass` / `.ssa` / `.srt` / `.vtt` | 纯 JS 解析 → WebVTT（去样式标签、保留台词与换行） | 默认镜像即可 |
-| MKV 内挂字幕轨（ASS / SRT） | ffmpeg 抽取 → WebVTT，按集缓存到 `data/subs/` | `:latest-ffmpeg` 变体 |
+### 样式支持
 
-- 播放器底栏有「字幕 开 / 关」按钮，开关状态存在浏览器里；
-- 打开即自动挂载，`<track>` 自带时间轴，拖进度、切集都不用额外处理；
-- `GET /subtitle/<fileId>` 返回 `text/vtt`，响应头 `X-Subtitle-Source: external|embedded` 标明来源；
-- `/admin → 配置 → 字幕` 可以整体关闭（关掉后连接口都不再提供）。
+字幕由播放器自己解析渲染（**不用 `<track>`**，所以视频走 302 到跨域 CDN 也能显示）：
 
-内挂字幕第一次加载要把整集读一遍（实测 612 MB 的 MKV 抽取 408 条字幕约 23 秒，取决于 WebDAV 速度），转完写缓存，之后秒开；播放器会在当前一集快播完时**提前预热**下一集的字幕。
+| ASS 特性 | 支持 |
+| --- | --- |
+| 斜体 / 粗体 / 下划线 | ✅ |
+| 颜色（`\c&H..&` 与样式表 PrimaryColour） | ✅ |
+| 字号（样式 Fontsize / `\fs`） | ✅ 按视频高度等比缩放 |
+| 对齐（`\an1-9` 与样式 Alignment） | ✅ 上/中/下三档 |
+| 定位（`\pos(x,y)`） | ✅ 按 PlayRes 换算成百分比 |
+| 换行 / 空格（`\N` / `\h`） | ✅ |
+| 卡拉OK逐字（`\k` / `\kf`） | ⚠️ 文字保留，逐字高亮不还原 |
+| 矢量绘图（`\p1`） | ⚠️ 丢弃图形，保留同段文字 |
+| 淡入淡出 / 移动（`\fad` / `\move`） | ❌ |
 
-**限制**：ASS 的特效、定位、字体样式会丢失（WebVTT 不支持这些），只保留文本与换行；一个 `.ass` 里同时含日中双语的，两种都会显示出来。
+接口：`GET /subtitle/<fileId>` 返回 WebVTT，`GET /subtitle/<fileId>?format=json` 返回带样式的 cue：
 
----
+```jsonc
+{
+  "playResX": 1920, "playResY": 1080, "kind": "ass",
+  "cues": [{ "start": 1.0, "end": 4.0, "html": "<i>斜体</i>", "align": 2, "pos": null, "size": 72 }]
+}
+```
 
 ## 兼容模式（iOS / Safari 放不了 MKV）
 

@@ -28,6 +28,8 @@ const state = {
   subtitleOn: localStorage.getItem('rotator.subtitles') !== '0',
   cues: null,
   cuesFor: null,
+  cuesMeta: null,
+  cueKey: '',
   subtitleFor: null,
   prefetchedSub: null,
   forceCompat: false,
@@ -357,18 +359,42 @@ function renderCue() {
   if (!layer) return;
   const cues = state.cues;
   if (!state.subtitleOn || !cues || cues.length === 0) {
-    layer.classList.remove('show');
-    layer.textContent = '';
+    if (state.cueKey !== 'off') {
+      layer.innerHTML = '';
+      layer.classList.remove('show');
+      state.cueKey = 'off';
+    }
     return;
   }
   const t = player.currentTime || 0;
-  const hit = cues.find((c) => t >= c.start && t < c.end);
-  if (!hit) {
+  const active = cues.filter((c) => t >= c.start && t < c.end);
+  const key = active.map((c) => c.start + '|' + c.html).join('##');
+  if (key === state.cueKey) return;
+  state.cueKey = key;
+  layer.innerHTML = '';
+  if (active.length === 0) {
     layer.classList.remove('show');
-    layer.textContent = '';
     return;
   }
-  if (layer.textContent !== hit.text) layer.textContent = hit.text;
+  const wrap = $('videoWrap');
+  const stageH = (wrap && wrap.clientHeight) || player.clientHeight || 720;
+  const meta = state.cuesMeta || { playResX: 1280, playResY: 720 };
+  for (const c of active) {
+    const el2 = document.createElement('div');
+    el2.className = 'cue';
+    el2.innerHTML = c.html;
+    if (c.pos) {
+      el2.classList.add('anchor');
+      el2.style.left = (c.pos.x / meta.playResX) * 100 + '%';
+      el2.style.top = (c.pos.y / meta.playResY) * 100 + '%';
+      el2.style.transform = 'translate(-50%, -50%)';
+    } else {
+      const an = c.align || 2;
+      el2.classList.add(an <= 3 ? 'bottom' : an <= 6 ? 'middle' : 'top');
+    }
+    if (c.size) el2.style.fontSize = Math.max(12, (c.size / meta.playResY) * stageH) + 'px';
+    layer.append(el2);
+  }
   layer.classList.add('show');
 }
 
@@ -376,30 +402,23 @@ async function loadCues(item) {
   if (state.cuesFor === item.fileId) return;
   state.cuesFor = item.fileId;
   state.cues = null;
+  state.cueKey = '';
+  state.cuesMeta = null;
   try {
-    const url = new URL(item.subtitleUrl, typeof location !== 'undefined' ? location.href : 'http://localhost/');
+    const target = item.subtitleJsonUrl || item.subtitleUrl;
+    const url = new URL(target, typeof location !== 'undefined' ? location.href : 'http://localhost/');
+    if (!item.subtitleJsonUrl) url.searchParams.set('format', 'json');
     const res = await fetch(url, { cache: 'force-cache' });
     if (!res.ok) throw new Error('HTTP ' + res.status);
-    const text = await res.text();
-    state.cues = parseVtt(text);
+    const data = await res.json();
+    state.cues = (data.cues || []).map((c) => ({ ...c, start: Number(c.start), end: Number(c.end) }));
+    state.cuesMeta = { playResX: data.playResX || 1280, playResY: data.playResY || 720, kind: data.kind };
     if (state.cues.length === 0) setStatus('这一集的字幕是空的');
     else renderCue();
   } catch (err) {
     state.cues = null;
     setStatus('字幕加载失败：' + err.message);
-  }
-}
-
-/** 同步页脚与播放器内的字幕开关 */
-function syncSubtitleButtons(item) {
-  const has = Boolean(item && item.subtitleUrl);
-  for (const id of ['subtitleBtn', 'ccBtn']) {
-    const b = $(id);
-    if (!b) continue;
-    b.hidden = !has;
-    if (!has) continue;
-    b.textContent = id === 'ccBtn' ? (state.subtitleOn ? 'CC 开' : 'CC 关') : state.subtitleOn ? '字幕 开' : '字幕 关';
-    b.classList.toggle('on', state.subtitleOn);
+    renderCue();
   }
 }
 

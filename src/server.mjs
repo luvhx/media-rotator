@@ -245,6 +245,7 @@ export function createApp(baseConfig) {
       directUrl: directUrlOf(ep, opts.prefix),
       mp4Url: `/stream/${ep.fileId}?format=mp4`,
       subtitleUrl: subtitleEnabled() && subtitleKindOf(ep) ? `/subtitle/${ep.fileId}` : null,
+      subtitleJsonUrl: subtitleEnabled() && subtitleKindOf(ep) ? `/subtitle/${ep.fileId}?format=json` : null,
       subtitleKind: subtitleEnabled() ? subtitleKindOf(ep) : null,
     };
   }
@@ -1117,6 +1118,19 @@ export function createApp(baseConfig) {
         const fileId = pathname.slice('/subtitle/'.length);
         const ep = state.library.getEpisode(fileId);
         if (!ep) throw new HttpError(404, `未知文件：${fileId}`);
+        if (url.searchParams.get('format') === 'json') {
+          const cues = await state.subs.getCues(ep);
+          if (!cues) {
+            throw new HttpError(404, ep.subtitle ? '字幕转换失败' : '这一集没有外挂字幕，也没有可抽取的内挂字幕');
+          }
+          res.writeHead(200, {
+            'Content-Type': 'application/json; charset=utf-8',
+            'Cache-Control': 'public, max-age=86400',
+            'Access-Control-Allow-Origin': '*',
+            'X-Subtitle-Source': cues.source,
+          });
+          return res.end(JSON.stringify(cues));
+        }
         const result = await state.subs.get(ep);
         if (!result) {
           throw new HttpError(404, ep.subtitle ? '字幕转换失败' : '这一集没有外挂字幕，也没有可抽取的内挂字幕');
