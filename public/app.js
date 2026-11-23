@@ -26,6 +26,10 @@ const state = {
   switching: false,
   lastSeekAt: 0,
   subtitleOn: localStorage.getItem('rotator.subtitles') !== '0',
+  subSize: Number(localStorage.getItem('rotator.sub.size') || 1),
+  subAlign: Number(localStorage.getItem('rotator.sub.align') || 0),
+  subMargin: Number(localStorage.getItem('rotator.sub.margin') || 8),
+  subBg: localStorage.getItem('rotator.sub.bg') === '1',
   cues: null,
   cuesFor: null,
   cuesMeta: null,
@@ -368,7 +372,7 @@ function renderCue() {
   }
   const t = player.currentTime || 0;
   const active = cues.filter((c) => t >= c.start && t < c.end);
-  const key = active.map((c) => c.start + '|' + c.html + '|' + (c.pos ? c.pos.x + ',' + c.pos.y : c.align)).join('##');
+  const key = active.map((c) => c.start + '|' + c.html + '|' + (c.pos ? c.pos.x + ',' + c.pos.y : c.align)).join('##') + '|' + state.subAlign + '|' + state.subSize + '|' + state.subMargin;
   if (key === state.cueKey) return;
   state.cueKey = key;
   layer.innerHTML = '';
@@ -376,6 +380,8 @@ function renderCue() {
     layer.classList.remove('show');
     return;
   }
+
+  layer.style.setProperty('--sub-bg', state.subBg ? 'rgba(0, 0, 0, 0.58)' : 'transparent');
 
   const wrap = $('videoWrap');
   const stageH = (wrap && wrap.clientHeight) || player.clientHeight || 720;
@@ -385,29 +391,28 @@ function renderCue() {
     const node = document.createElement('div');
     node.className = 'cue';
     node.innerHTML = c.html;
-    if (c.size) node.style.fontSize = Math.max(12, (c.size / meta.playResY) * stageH) + 'px';
+    if (c.size) node.style.fontSize = Math.max(12, ((c.size / meta.playResY) * stageH * state.subSize) | 0) + 'px';
+    else node.style.fontSize = Math.round(26 * state.subSize) + 'px';
     return node;
   };
 
-  // 同一锚点的多条（双语字幕）纵向堆叠，不能叠在一起
-  const groups = { top: [], middle: [], bottom: [] };
-  const positioned = [];
-  for (const c of active) {
-    if (c.pos) {
-      positioned.push(c);
-      continue;
-    }
-    const an = c.align || 2;
-    groups[an <= 3 ? 'bottom' : an <= 6 ? 'middle' : 'top'].push(c);
+  // 位置：0 = 跟随字幕自带对齐；否则面板强制统一位置（\pos 除外）
+  const free = active.filter((c) => !c.pos);
+  const groups2 = new Map();
+  for (const c of free) {
+    const key2 = state.subAlign === 0 ? (c.align <= 3 ? 'bottom' : c.align <= 6 ? 'middle' : 'top') : state.subAlign <= 3 ? 'bottom' : state.subAlign <= 6 ? 'middle' : 'top';
+    if (!groups2.has(key2)) groups2.set(key2, []);
+    groups2.get(key2).push(c);
   }
-  for (const [anchor, list] of Object.entries(groups)) {
-    if (list.length === 0) continue;
+  for (const [anchor, list] of groups2) {
     const box = document.createElement('div');
     box.className = 'cue-group ' + anchor;
+    if (anchor === 'bottom') box.style.bottom = state.subMargin + '%';
+    else if (anchor === 'top') box.style.top = state.subMargin + '%';
     for (const c of list) box.append(makeEl(c));
     layer.append(box);
   }
-  for (const c of positioned) {
+  for (const c of active.filter((c) => c.pos)) {
     const node = makeEl(c);
     node.classList.add('positioned');
     node.style.left = (c.pos.x / meta.playResX) * 100 + '%';
@@ -443,35 +448,40 @@ async function loadCues(item) {
   }
 }
 
-/** 同步页脚与播放器内的字幕开关（有字幕才显示） */
-function syncSubtitleButtons(item) {
+/** 同步字幕面板的显示状态 */
+function syncSubtitlePanel(item) {
   const has = Boolean(item && item.subtitleUrl);
-  for (const id of ['subtitleBtn', 'ccBtn']) {
-    const b = $(id);
-    if (!b) continue;
-    b.hidden = !has;
-    if (!has) continue;
-    b.textContent = id === 'ccBtn' ? (state.subtitleOn ? 'CC 开' : 'CC 关') : state.subtitleOn ? '字幕 开' : '字幕 关';
-    b.classList.toggle('on', state.subtitleOn);
+  const panel = $('subPanel');
+  if (panel) panel.classList.toggle('disabled', !has);
+  const enabled = $('subEnabled');
+  if (enabled) {
+    enabled.checked = state.subtitleOn && has;
+    enabled.disabled = !has;
+  }
+  const stateEl = $('subState');
+  if (stateEl) {
+    stateEl.textContent = !has
+      ? '本集无字幕'
+      : state.subtitleOn
+        ? `已加载（${item.subtitleKind === 'embedded' ? '内挂' : '外挂'}）`
+        : '已关闭';
   }
 }
 
 function applySubtitle(item) {
-  const btn = $('subtitleBtn');
   const layer = $('subtitleLayer');
   if (layer) {
     layer.classList.remove('show');
-    layer.textContent = '';
+    layer.innerHTML = '';
   }
-  if (!btn) return;
   if (!item || !item.subtitleUrl) {
-    syncSubtitleButtons(null);
+    syncSubtitlePanel(null);
     state.subtitleFor = item?.fileId || null;
     state.cues = null;
     state.cuesFor = null;
     return;
   }
-  syncSubtitleButtons(item);
+  syncSubtitlePanel(item);
   state.subtitleFor = item.fileId;
   if (state.subtitleOn) loadCues(item);
 }
@@ -767,6 +777,62 @@ function renderChannels() {
   }
 }
 
+
+/* ------------------------------ 字幕面板 ------------------------------ */
+
+(function bindSubtitlePanel() {
+  const sizeEl = $('subSize');
+  const alignEl = $('subAlign');
+  const marginEl = $('subMargin');
+  const marginVal = $('subMarginVal');
+  const bgEl = $('subBg');
+  const enabledEl = $('subEnabled');
+  const resetEl = $('subReset');
+
+  const persist = () => {
+    localStorage.setItem('rotator.sub.size', String(state.subSize));
+    localStorage.setItem('rotator.sub.align', String(state.subAlign));
+    localStorage.setItem('rotator.sub.margin', String(state.subMargin));
+    localStorage.setItem('rotator.sub.bg', state.subBg ? '1' : '0');
+  };
+  const redraw = () => {
+    state.cueKey = '';
+    renderCue();
+  };
+  const sync = () => {
+    if (sizeEl) sizeEl.value = String(state.subSize);
+    if (alignEl) alignEl.value = String(state.subAlign);
+    if (marginEl) marginEl.value = String(state.subMargin);
+    if (marginVal) marginVal.textContent = state.subMargin + '%';
+    if (bgEl) bgEl.checked = state.subBg;
+    syncSubtitlePanel(state.now?.now);
+  };
+
+  sizeEl?.addEventListener('change', () => { state.subSize = Number(sizeEl.value) || 1; persist(); redraw(); });
+  alignEl?.addEventListener('change', () => { state.subAlign = Number(alignEl.value) || 2; persist(); redraw(); });
+  marginEl?.addEventListener('input', () => {
+    state.subMargin = Number(marginEl.value) || 0;
+    if (marginVal) marginVal.textContent = state.subMargin + '%';
+    persist();
+    redraw();
+  });
+  bgEl?.addEventListener('change', () => { state.subBg = bgEl.checked; persist(); redraw(); });
+  enabledEl?.addEventListener('change', () => toggleSubtitles(enabledEl.checked));
+  resetEl?.addEventListener('click', () => {
+    state.subSize = 1;
+    state.subAlign = 0;
+    state.subMargin = 8;
+    state.subBg = false;
+    state.subtitleOn = true;
+    localStorage.setItem('rotator.subtitles', '1');
+    persist();
+    sync();
+    redraw();
+  });
+
+  sync();
+})();
+
 /* ------------------------------ 事件 ------------------------------ */
 
 // 原生「全屏视频」会把 DOM 覆盖层挡掉：改成全屏整个播放器容器
@@ -888,16 +954,13 @@ player.addEventListener('error', () => {
   showError(`播放失败：${map[code] || '未知错误'}${code ? ` (code ${code})` : ''}${code === 3 || code === 4 ? '　→ 试试底栏「兼容模式」' : ''}`);
 });
 
-function toggleSubtitles() {
-  state.subtitleOn = !state.subtitleOn;
+function toggleSubtitles(force) {
+  state.subtitleOn = typeof force === 'boolean' ? force : !state.subtitleOn;
   localStorage.setItem('rotator.subtitles', state.subtitleOn ? '1' : '0');
-  syncSubtitleButtons(state.now?.now);
+  syncSubtitlePanel(state.now?.now);
   if (state.subtitleOn && state.now?.now?.subtitleUrl) loadCues(state.now.now);
   renderCue();
-  setStatus(state.subtitleOn ? '字幕已开启' : '字幕已关闭');
 }
-$('subtitleBtn')?.addEventListener('click', toggleSubtitles);
-$('ccBtn')?.addEventListener('click', toggleSubtitles);
 
 $('compatBtn')?.addEventListener('click', () => {
   state.forceCompat = !state.forceCompat;

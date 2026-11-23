@@ -27,7 +27,6 @@
           <video id="player" playsinline preload="auto" muted controls></video>
 
           <div class="subtitle-layer" id="subtitleLayer"></div>
-          <button class="cc-btn" id="ccBtn" hidden title="字幕开关">CC</button>
           <button class="cc-btn fs-btn" id="fsBtn" title="全屏（字幕一起全屏）">⛶</button>
 
           <div class="overlay" id="overlay">
@@ -44,6 +43,44 @@
           </div>
           <pre class="debug-panel" id="debugPanel" hidden></pre>
         </div>
+
+        <section class="sub-panel" id="subPanel">
+          <div class="sub-head">
+            <h3>字幕</h3>
+            <span class="sub-state" id="subState">本集无字幕</span>
+            <span class="grow"></span>
+            <label class="switch">
+              <input type="checkbox" id="subEnabled" checked />
+              <span>显示</span>
+            </label>
+          </div>
+          <div class="sub-grid">
+            <label class="sub-field">字号
+              <select id="subSize">
+                <option value="0.8">小</option>
+                <option value="1" selected>中</option>
+                <option value="1.25">大</option>
+                <option value="1.5">特大</option>
+              </select>
+            </label>
+            <label class="sub-field">位置
+              <select id="subAlign">
+                <option value="0" selected>跟随字幕</option>
+                <option value="2">底部</option>
+                <option value="5">居中</option>
+                <option value="8">顶部</option>
+              </select>
+            </label>
+            <label class="sub-field">边距
+              <input type="range" id="subMargin" min="0" max="30" step="1" value="8" />
+              <span class="sub-val" id="subMarginVal">8%</span>
+            </label>
+            <label class="sub-field check">背景
+              <input type="checkbox" id="subBg" />
+            </label>
+            <button class="btn ghost small" id="subReset" type="button">恢复默认</button>
+          </div>
+        </section>
 
         <div class="nowbar">
           <div class="nowline">
@@ -74,7 +111,6 @@
     <footer class="foot">
       <span id="statusText">初始化…</span>
       <span class="spacer"></span>
-      <button class="ghost" id="subtitleBtn" hidden title="切换字幕显示">字幕 开</button>
       <button class="ghost" id="compatBtn" title="MKV 转 MP4，兼容 iPad/Safari">兼容模式</button>
       <a id="directLink" href="#" target="_blank" rel="noreferrer">直链</a>
       <a class="ghost link" href="/admin" target="_blank" rel="noreferrer">管理</a>

@@ -165,16 +165,19 @@ if (nowData.off) {
   const expect = nowData.now.offsetMs / 1000;
   log(Math.abs(player.currentTime - expect) < 6, 'seek 位置与后端偏移一致', `期望≈${expect.toFixed(1)}s 实际=${player.currentTime.toFixed(1)}s`);
   log(q('progressFill').style.width?.endsWith('%'), '进度条更新', q('progressFill').style.width);
+  // 字幕面板（播放器外）
+  const panel = q('subPanel');
+  log(Boolean(panel), '字幕面板存在');
   if (nowData.now?.subtitleUrl) {
-    const sb = q('subtitleBtn');
-    const cb = q('ccBtn');
-    log(Boolean(sb) && sb.hidden === false, '页脚字幕按钮可见', sb ? sb.textContent : '(无)');
-    log(Boolean(cb) && cb.hidden === false, '播放器 CC 按钮可见', cb ? cb.textContent : '(无)');
-    // 切换一次，确认不抛错
-    if (cb) cb.dispatch('click');
-    if (cb) cb.dispatch('click');
-    log(true, '字幕开关可点击');
+    const stateEl = q('subState');
+    log(Boolean(stateEl) && stateEl.textContent.length > 0, '字幕状态显示', stateEl ? stateEl.textContent : '(无)');
+    const enabled = q('subEnabled');
+    log(Boolean(enabled) && enabled.disabled === false, '字幕开关可用');
+    log(Boolean(q('subSize')) && Boolean(q('subAlign')) && Boolean(q('subMargin')), '字幕可调整字号/位置/边距');
+  } else {
+    log(true, '本集无字幕（面板禁用）');
   }
+
   log(q('syncText').className.includes('sync'), '同步状态', q('syncText').textContent);
 
   // 桩里的 video 不会自己走时间，漂移累积后 tick 应再次 seek 回直播位置
