@@ -1,6 +1,6 @@
 /* ---------------- 主题 ---------------- */
-:root,
-:root[data-theme='slate'] {
+/* 夜间（默认）：:root 即夜间，白天用 data-theme="light" 覆盖 */
+:root {
   --bg: #14171c;
   --bg-2: #191d24;
   --panel: #1c2129;
@@ -8,30 +8,14 @@
   --line: #2b313b;
   --text: #e3e6ea;
   --muted: #8e959f;
-  --accent: #6b7688;
-  --accent-2: #7d8b9e;
   --live: #b3555f;
+  --bar-bg: rgba(20, 23, 28, 0.82);
   --radius: 12px;
   --glow-1: rgba(255, 255, 255, 0.02);
   --glow-2: transparent;
-  --bar-bg: rgba(20, 23, 28, 0.82);
-}
-
-:root[data-theme='dark'] {
-  --bg: #0b0d12;
-  --bg-2: #12151d;
-  --panel: #171b25;
-  --panel-2: #1d2230;
-  --line: #232838;
-  --text: #e8ecf5;
-  --muted: #8b93a7;
-  --accent: #7c5cff;
-  --accent-2: #37e0c0;
-  --live: #ff4d6d;
-  --radius: 14px;
-  --glow-1: rgba(124, 92, 255, 0.10);
-  --glow-2: rgba(55, 224, 192, 0.08);
-  --bar-bg: rgba(10, 12, 18, 0.72);
+  /* 主题色由 theme.js 写入 --accent-user */
+  --accent: var(--accent-user, #6b7688);
+  --accent-2: var(--accent-user, #6b7688);
 }
 
 :root[data-theme='light'] {
@@ -42,13 +26,10 @@
   --line: #dcdfe4;
   --text: #22262d;
   --muted: #6b7280;
-  --accent: #4a5568;
-  --accent-2: #5a6b7c;
   --live: #b3555f;
-  --radius: 12px;
+  --bar-bg: rgba(255, 255, 255, 0.9);
   --glow-1: transparent;
   --glow-2: transparent;
-  --bar-bg: rgba(255, 255, 255, 0.88);
 }
 
 * {

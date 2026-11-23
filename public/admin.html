@@ -75,6 +75,38 @@
       <!-- ============================ 配置 ============================ -->
       <section class="view" data-view="config">
         <div class="panel">
+          <div class="panel-head"><h2>界面</h2></div>
+          <div class="form-grid">
+            <label
+              >外观模式
+              <select id="cfg-ui-mode">
+                <option value="auto">自适应（跟随系统）</option>
+                <option value="light">白天</option>
+                <option value="dark">夜间</option>
+              </select>
+            </label>
+            <label
+              >主题色
+              <span class="accent-row">
+                <input id="cfg-ui-accent" type="color" value="#6b7688" />
+                <input id="cfg-ui-accent-text" placeholder="#6b7688" maxlength="7" />
+              </span>
+            </label>
+            <label class="check inline"><input type="checkbox" id="cfg-ui-preview" checked /> 修改即时预览</label>
+          </div>
+          <div class="accent-presets" id="accentPresets">
+            <button type="button" class="accent-swatch" data-color="#6b7688" style="--c:#6b7688" title="石板灰"></button>
+            <button type="button" class="accent-swatch" data-color="#7c5cff" style="--c:#7c5cff" title="紫"></button>
+            <button type="button" class="accent-swatch" data-color="#3b82f6" style="--c:#3b82f6" title="蓝"></button>
+            <button type="button" class="accent-swatch" data-color="#22c55e" style="--c:#22c55e" title="绿"></button>
+            <button type="button" class="accent-swatch" data-color="#f59e0b" style="--c:#f59e0b" title="橙"></button>
+            <button type="button" class="accent-swatch" data-color="#ef4444" style="--c:#ef4444" title="红"></button>
+            <button type="button" class="accent-swatch" data-color="#64748b" style="--c:#64748b" title="蓝灰"></button>
+          </div>
+          <p class="hint">外观按浏览器保存一份缓存，同时写入服务端配置，换设备打开也一致。</p>
+        </div>
+
+        <div class="panel">
           <div class="panel-head"><h2>WebDAV 源</h2></div>
           <div class="form-grid">
             <label>地址 <input id="cfg-baseUrl" placeholder="http://主机:端口/dav/路径" /></label>

@@ -150,10 +150,18 @@ environment:
 
 ## 界面与主题
 
-- 顶栏右上角可切换主题：**朴素（默认）/ 深色 / 浅色**，选择存在 localStorage
-- 品牌名统一为 **Media Rotator**
-- 主题基于 CSS 变量（`--bg / --panel / --line / --text / --accent ...`），
-  播放器（`style.css`）与管理界面（`admin.css`）共用一套命名
+配置页（`/admin` → 配置）里的「界面」面板：
+
+| 项 | 说明 |
+| --- | --- |
+| 外观模式 | **自适应**（跟随系统 `prefers-color-scheme`）/ **白天** / **夜间** |
+| 主题色 | 任意 `#RRGGBB`，也可点预设色块；用于按钮、进度条、选中态 |
+| 即时预览 | 勾选后改颜色立刻生效，不保存也能看效果 |
+
+- 选择保存在**服务端配置**（`data/settings.json` 的 `ui`），换设备打开一致
+- 浏览器另存一份缓存，首屏即时上色不闪烁
+- 颜色体系全走 CSS 变量（`--bg / --panel / --line / --text / --accent ...`），
+  播放器 `style.css` 与管理界面 `admin.css` 共用
 
 ## 播放器
 

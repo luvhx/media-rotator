@@ -130,6 +130,7 @@ function buildDraft(state) {
         slots: clone(c.slots),
       }));
   return {
+    ui: { mode: st.ui?.mode ?? cfg.ui?.mode ?? 'auto', accent: st.ui?.accent ?? cfg.ui?.accent ?? '#6b7688' },
     webdav: {
       baseUrl: st.webdav?.baseUrl ?? cfg.webdav.baseUrl,
       root: st.webdav?.root ?? cfg.webdav.root,
@@ -386,6 +387,17 @@ function fillConfigForm() {
   $('#cfg-token').placeholder = S.state.config.stream.tokenSet ? '已设置，留空则不修改' : '可选';
   $('#cfg-embed').checked = Boolean(d.stream.embedCredentials);
   $('#cfg-timezone').value = d.timezone || 'Asia/Shanghai';
+  const ui = S.state.config.ui || { mode: 'auto', accent: '#6b7688' };
+  S.draft.ui = { ...ui };
+  const uiMode = $('#cfg-ui-mode');
+  if (uiMode) uiMode.value = ui.mode || 'auto';
+  const uiAccent = $('#cfg-ui-accent');
+  const uiAccentText = $('#cfg-ui-accent-text');
+  if (uiAccent) uiAccent.value = ui.accent || '#6b7688';
+  if (uiAccentText) uiAccentText.value = ui.accent || '#6b7688';
+  for (const sw of $$('.accent-swatch')) {
+    sw.classList.toggle('active', String(sw.dataset.color).toLowerCase() === String(ui.accent).toLowerCase());
+  }
   $('#cfg-tmdb-lang').value = d.tmdb.language || 'zh-CN';
   $('#cfg-subs').checked = S.draft.subtitles?.enabled !== false;
   const pf = S.draft.prefetch || {};
@@ -460,6 +472,30 @@ function bindConfigForm() {
     $(`#${id}`).addEventListener('change', read);
   }
   $('#cfg-embed').addEventListener('change', read);
+  const applyUiPreview = () => {
+    if (!$('#cfg-ui-preview')?.checked) return;
+    if (typeof window !== 'undefined' && typeof window.previewUiTheme === 'function') {
+      window.previewUiTheme({ mode: S.draft.ui.mode, accent: S.draft.ui.accent });
+    }
+  };
+  $('#cfg-ui-mode')?.addEventListener('change', (e) => {
+    S.draft.ui = { ...S.draft.ui, mode: e.target.value };
+    applyUiPreview();
+    markDirty('config');
+  });
+  const setAccent = (color) => {
+    if (!/^#[0-9a-fA-F]{6}$/.test(color)) return;
+    S.draft.ui = { ...S.draft.ui, accent: color.toLowerCase() };
+    if ($('#cfg-ui-accent')) $('#cfg-ui-accent').value = color;
+    if ($('#cfg-ui-accent-text')) $('#cfg-ui-accent-text').value = color.toLowerCase();
+    for (const sw of $$('.accent-swatch')) sw.classList.toggle('active', String(sw.dataset.color).toLowerCase() === color.toLowerCase());
+    applyUiPreview();
+    markDirty('config');
+  };
+  $('#cfg-ui-accent')?.addEventListener('input', (e) => setAccent(e.target.value));
+  $('#cfg-ui-accent-text')?.addEventListener('change', (e) => setAccent(e.target.value.trim()));
+  for (const sw of $$('.accent-swatch')) sw.addEventListener('click', () => setAccent(sw.dataset.color));
+
   $('#cfg-subs').addEventListener('change', (e) => {
     S.draft.subtitles = { enabled: e.target.checked };
     markDirty('config');
@@ -1222,6 +1258,7 @@ async function saveAll() {
       urlPrefix: S.draft.stream.urlPrefix || '',
       embedCredentials: Boolean(S.draft.stream.embedCredentials),
     },
+    ui: { mode: S.draft.ui?.mode || 'auto', accent: S.draft.ui?.accent || '#6b7688' },
     timezone: S.draft.timezone,
     tmdb: { language: S.draft.tmdb.language },
     subtitles: { enabled: S.draft.subtitles?.enabled !== false },

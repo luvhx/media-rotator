@@ -52,7 +52,7 @@ server.listen(port, host, () => {
   const lib = state.library;
   const cfg = state.config;
   console.log('');
-  console.log('  媒体轮播服务已启动');
+  console.log('  Media Rotator 服务已启动');
   console.log(`  ├ 播放   http://127.0.0.1:${port}/`);
   console.log(`  ├ 管理   http://127.0.0.1:${port}/admin`);
   console.log(`  ├ 接口   http://127.0.0.1:${port}/api/now?channel=${cfg.channels[0]?.id || '(待配置)'}`);

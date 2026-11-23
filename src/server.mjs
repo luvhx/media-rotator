@@ -495,6 +495,7 @@ export function createApp(baseConfig) {
           embedCredentials: cfg.stream.embedCredentials,
         },
         timezone: cfg.timezone,
+        ui: { mode: cfg.ui?.mode || 'auto', accent: cfg.ui?.accent || '#6b7688' },
         tmdb: {
           language: cfg.tmdb.language,
           enabled: state.tmdb.enabled,
@@ -1075,6 +1076,7 @@ export function createApp(baseConfig) {
           serverTime: Date.now(),
           timezone: state.config.timezone,
           stream: { mode: state.config.stream.mode, urlPrefix: state.config.stream.urlPrefix },
+          ui: { mode: state.config.ui?.mode || 'auto', accent: state.config.ui?.accent || '#6b7688' },
           channels: state.config.channels.map((c) => channelSummary(c)),
           library: { series: state.library.series.length, episodes: state.library.episodes.length },
           ready: state.library.episodes.length > 0 && configured() && state.config.channels.length > 0,

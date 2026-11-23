@@ -51,6 +51,7 @@ export function applySettings(baseConfig, settings = {}) {
   const stream = pick(settings.stream, EDITABLE_STREAM);
   if (Object.keys(stream).length > 0) cfg.stream = { ...cfg.stream, ...stream };
   if (settings.timezone) cfg.timezone = settings.timezone;
+  if (settings.ui) cfg.ui = { ...(cfg.ui || {}), ...pick(settings.ui, ['mode', 'accent']) };
   if (settings.tmdb) cfg.tmdb = { ...(cfg.tmdb || {}), ...pick(settings.tmdb, ['apiKey', 'readToken', 'language']) };
   if (settings.subtitles) cfg.subtitles = { ...(cfg.subtitles || {}), ...pick(settings.subtitles, ['enabled']) };
   if (settings.remux) cfg.remux = { ...(cfg.remux || {}), ...pick(settings.remux, ['maxFiles', 'maxBytes']) };
@@ -112,6 +113,16 @@ export function validateSettings(settings, { baseConfig, timezone } = {}) {
     }
     if (w.timeoutMs !== undefined && (!Number.isFinite(Number(w.timeoutMs)) || Number(w.timeoutMs) < 1000)) {
       throw new Error('超时时间需大于 1000ms');
+    }
+  }
+
+  if (settings.ui) {
+    const ui = settings.ui;
+    if (ui.mode !== undefined && !['auto', 'light', 'dark'].includes(ui.mode)) {
+      throw new Error('界面模式只能是 auto / light / dark');
+    }
+    if (ui.accent !== undefined && !/^#[0-9a-fA-F]{6}$/.test(String(ui.accent))) {
+      throw new Error('主题色需为 #RRGGBB 格式');
     }
   }
 

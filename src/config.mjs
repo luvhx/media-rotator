@@ -39,6 +39,13 @@ export const DEFAULT_CONFIG = {
     fallbackDurationMs: 24 * 60 * 1000,
   },
   // 字幕：外挂 .ass/.srt 会自动转 WebVTT 挂到 <track>；内挂轨道需要镜像里带 ffmpeg
+  // 界面外观（播放页与管理页共用）
+  ui: {
+    // auto = 跟随系统；light = 白天；dark = 夜间
+    mode: 'auto',
+    // 主题色（十六进制），用于按钮/进度条/选中态
+    accent: '#6b7688',
+  },
   subtitles: {
     enabled: true,
     ffmpegPath: 'ffmpeg',
@@ -179,6 +186,12 @@ export function finalizeConfig(config, root = PROJECT_ROOT, { allowIncomplete = 
     config.__incomplete = true;
   }
   if (!isValidTimeZone(config.timezone)) throw new Error(`无效时区：${config.timezone}`);
+
+  // 界面主题
+  config.ui = config.ui || {};
+  if (!['auto', 'light', 'dark'].includes(config.ui.mode)) config.ui.mode = 'auto';
+  if (!/^#[0-9a-fA-F]{6}$/.test(String(config.ui.accent || ''))) config.ui.accent = '#6b7688';
+  config.ui.accent = String(config.ui.accent).toLowerCase();
 
   // 频道：允许值简写为单个对象
   const channels = Array.isArray(config.channels) ? config.channels : config.channels ? [config.channels] : [];

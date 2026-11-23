@@ -1,6 +1,5 @@
 /* ---------------- 主题 ---------------- */
-:root,
-:root[data-theme='slate'] {
+:root {
   --bg: #14171c;
   --bg-2: #191d24;
   --panel: #1c2129;
@@ -8,31 +7,16 @@
   --line: #2b313b;
   --text: #e3e6ea;
   --muted: #8e959f;
-  --accent: #6b7688;
-  --accent-2: #7d8b9e;
   --danger: #b3555f;
   --warn: #b08a4a;
-  --radius: 12px;
   --bar-bg: rgba(20, 23, 28, 0.9);
-}
-
-:root[data-theme='dark'] {
-  --bg: #0b0d12;
-  --bg-2: #12151d;
-  --panel: #171b25;
-  --panel-2: #1d2230;
-  --line: #262c3d;
-  --text: #e8ecf5;
-  --muted: #8b93a7;
-  --accent: #7c5cff;
-  --accent-2: #37e0c0;
-  --danger: #ff5c7a;
-  --warn: #ffc85c;
-  --radius: 14px;
-  --bar-bg: rgba(10, 12, 18, 0.8);
+  --radius: 12px;
+  --accent: var(--accent-user, #6b7688);
+  --accent-2: var(--accent-user, #6b7688);
 }
 
 :root[data-theme='light'] {
+  --input-bg: #ffffff;
   --bg: #f4f5f7;
   --bg-2: #ffffff;
   --panel: #ffffff;
@@ -40,12 +24,9 @@
   --line: #dcdfe4;
   --text: #22262d;
   --muted: #6b7280;
-  --accent: #4a5568;
-  --accent-2: #5a6b7c;
   --danger: #b3555f;
   --warn: #9a7431;
-  --radius: 12px;
-  --bar-bg: rgba(255, 255, 255, 0.9);
+  --bar-bg: rgba(255, 255, 255, 0.92);
 }
 
 * {
@@ -81,7 +62,7 @@ a {
   gap: 16px;
   padding: 14px 22px;
   border-bottom: 1px solid var(--line);
-  background: rgba(10, 12, 18, 0.75);
+  background: var(--bar-bg);
   backdrop-filter: blur(12px);
   position: sticky;
   top: 0;
@@ -130,7 +111,7 @@ a {
   border-bottom: 1px solid var(--line);
   position: sticky;
   top: 57px;
-  background: rgba(11, 13, 18, 0.92);
+  background: var(--bar-bg);
   backdrop-filter: blur(10px);
   z-index: 15;
   overflow-x: auto;
@@ -152,7 +133,7 @@ a {
 }
 
 .tab.active {
-  color: #fff;
+  color: var(--text);
   border-bottom-color: var(--accent);
 }
 
@@ -298,7 +279,7 @@ label {
 input,
 select,
 textarea {
-  background: #0e1219;
+  background: var(--input-bg, #0e1219);
   border: 1px solid var(--line);
   border-radius: 9px;
   color: var(--text);
@@ -312,8 +293,8 @@ input:focus,
 select:focus,
 textarea:focus {
   outline: none;
-  border-color: rgba(124, 92, 255, 0.7);
-  box-shadow: 0 0 0 3px rgba(124, 92, 255, 0.14);
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 18%, transparent);
 }
 
 input[readonly] {
@@ -480,7 +461,7 @@ textarea {
   justify-content: space-between;
   gap: 16px;
   padding: 12px 22px;
-  background: rgba(10, 12, 18, 0.94);
+  background: var(--bar-bg);
   border-top: 1px solid var(--line);
   backdrop-filter: blur(10px);
   z-index: 30;
@@ -1098,3 +1079,31 @@ textarea {
   cursor: pointer;
 }
 .theme-pick select:hover { border-color: var(--accent); }
+
+/* 界面主题设置 */
+.accent-row { display: inline-flex; align-items: center; gap: 8px; }
+.accent-row input[type='color'] {
+  width: 44px;
+  height: 30px;
+  padding: 2px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel-2);
+  cursor: pointer;
+}
+.accent-row input#cfg-ui-accent-text {
+  width: 96px;
+  font-family: ui-monospace, monospace;
+}
+.accent-presets { display: flex; gap: 8px; flex-wrap: wrap; margin: 10px 0 4px; }
+.accent-swatch {
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  border: 2px solid transparent;
+  background: var(--c);
+  cursor: pointer;
+  padding: 0;
+}
+.accent-swatch:hover { border-color: var(--text); }
+.accent-swatch.active { border-color: var(--text); box-shadow: 0 0 0 2px var(--panel); }
