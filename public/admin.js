@@ -1435,7 +1435,7 @@ async function boot() {
   if (S.state.scan.running) pollScan();
 
   // 支持 #channels / #preview 之类的深链
-  const hashTab = (typeof location !== 'undefined' ? location.hash : '').replace('#', '');
+  const hashTab = String((typeof location !== 'undefined' && location.hash) || '').replace('#', '');
   if (hashTab && hashTab !== S.tab) switchTab(hashTab);
 }
 
