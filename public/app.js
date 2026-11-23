@@ -390,6 +390,19 @@ async function loadCues(item) {
   }
 }
 
+/** 同步页脚与播放器内的字幕开关 */
+function syncSubtitleButtons(item) {
+  const has = Boolean(item && item.subtitleUrl);
+  for (const id of ['subtitleBtn', 'ccBtn']) {
+    const b = $(id);
+    if (!b) continue;
+    b.hidden = !has;
+    if (!has) continue;
+    b.textContent = id === 'ccBtn' ? (state.subtitleOn ? 'CC 开' : 'CC 关') : state.subtitleOn ? '字幕 开' : '字幕 关';
+    b.classList.toggle('on', state.subtitleOn);
+  }
+}
+
 function applySubtitle(item) {
   const btn = $('subtitleBtn');
   const layer = $('subtitleLayer');
@@ -399,15 +412,13 @@ function applySubtitle(item) {
   }
   if (!btn) return;
   if (!item || !item.subtitleUrl) {
-    btn.hidden = true;
+    syncSubtitleButtons(null);
     state.subtitleFor = item?.fileId || null;
     state.cues = null;
     state.cuesFor = null;
     return;
   }
-  btn.hidden = false;
-  btn.textContent = state.subtitleOn ? '字幕 开' : '字幕 关';
-  btn.classList.toggle('on', state.subtitleOn);
+  syncSubtitleButtons(item);
   state.subtitleFor = item.fileId;
   if (state.subtitleOn) loadCues(item);
 }
@@ -705,6 +716,34 @@ function renderChannels() {
 
 /* ------------------------------ 事件 ------------------------------ */
 
+// 原生「全屏视频」会把 DOM 覆盖层挡掉：改成全屏整个播放器容器
+const videoWrap = $('videoWrap');
+document.addEventListener('fullscreenchange', async () => {
+  if (document.fullscreenElement === player && videoWrap && videoWrap.requestFullscreen) {
+    try {
+      await document.exitFullscreen();
+      await videoWrap.requestFullscreen();
+    } catch {
+      /* 忽略 */
+    }
+  }
+  renderCue();
+});
+document.addEventListener('webkitfullscreenchange', renderCue);
+
+// 全屏按钮：全屏的是「播放器容器」，这样字幕层和按钮都在画面里
+$('fsBtn')?.addEventListener('click', async () => {
+  const wrap = $('videoWrap');
+  try {
+    if (document.fullscreenElement) await document.exitFullscreen();
+    else if (wrap?.requestFullscreen) await wrap.requestFullscreen();
+  } catch (err) {
+    setStatus('这个浏览器不支持全屏容器：' + err.message);
+  }
+});
+
+
+
 $('startBtn').addEventListener('click', () => {
   state.started = true;
   state.userPaused = false;
@@ -796,19 +835,16 @@ player.addEventListener('error', () => {
   showError(`播放失败：${map[code] || '未知错误'}${code ? ` (code ${code})` : ''}${code === 3 || code === 4 ? '　→ 试试底栏「兼容模式」' : ''}`);
 });
 
-$('subtitleBtn')?.addEventListener('click', () => {
+function toggleSubtitles() {
   state.subtitleOn = !state.subtitleOn;
   localStorage.setItem('rotator.subtitles', state.subtitleOn ? '1' : '0');
-  const btn2 = $('subtitleBtn');
-  if (btn2) {
-    btn2.textContent = state.subtitleOn ? '字幕 开' : '字幕 关';
-    btn2.classList.toggle('on', state.subtitleOn);
-  }
+  syncSubtitleButtons(state.now?.now);
   if (state.subtitleOn && state.now?.now?.subtitleUrl) loadCues(state.now.now);
   renderCue();
-  applySubtitle(state.now?.now);
   setStatus(state.subtitleOn ? '字幕已开启' : '字幕已关闭');
-});
+}
+$('subtitleBtn')?.addEventListener('click', toggleSubtitles);
+$('ccBtn')?.addEventListener('click', toggleSubtitles);
 
 $('compatBtn')?.addEventListener('click', () => {
   state.forceCompat = !state.forceCompat;
