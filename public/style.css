@@ -581,3 +581,24 @@ a.ghost.link {
   margin: 0 0 8px;
   color: var(--accent, #6ea8fe);
 }
+
+/* JS 渲染的字幕层：不依赖 <track>，跨域视频也能显示 */
+.subtitle-layer {
+  position: absolute;
+  left: 4%;
+  right: 4%;
+  bottom: 9%;
+  z-index: 6;
+  text-align: center;
+  white-space: pre-line;
+  pointer-events: none;
+  font-size: clamp(16px, 2.2vw, 30px);
+  line-height: 1.45;
+  font-weight: 600;
+  color: #fff;
+  text-shadow: 0 0 4px #000, 0 2px 8px rgba(0, 0, 0, 0.95), 0 0 2px rgba(0, 0, 0, 0.9);
+  paint-order: stroke fill;
+  -webkit-text-stroke: 1px rgba(0, 0, 0, 0.35);
+  display: none;
+}
+.subtitle-layer.show { display: block; }

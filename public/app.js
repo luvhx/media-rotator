@@ -26,6 +26,8 @@ const state = {
   switching: false,
   lastSeekAt: 0,
   subtitleOn: localStorage.getItem('rotator.subtitles') !== '0',
+  cues: null,
+  cuesFor: null,
   subtitleFor: null,
   prefetchedSub: null,
   forceCompat: false,
@@ -326,41 +328,87 @@ async function startCompat(item) {
  * 挂载字幕：后端把 .ass/.srt/内挂轨道统一转成 WebVTT，
  * 这里只需要一个 <track>，浏览器会自己按时间轴显示。
  */
+/** 解析 WebVTT（后端已经处理过 ASS/SRT 转换） */
+function parseVtt(text) {
+  const cues = [];
+  const blocks = String(text).replace(/\r/g, '').split(/\n{2,}/);
+  const toSec = (h, m, sec, ms) => (h ? Number(String(h).replace(':', '')) : 0) * 3600 + Number(m) * 60 + Number(sec) + Number(ms) / 1000;
+  const re = /(?:(\d+):)?(\d{1,2}):(\d{2})\.(\d{3})\s*-->\s*(?:(\d+):)?(\d{1,2}):(\d{2})\.(\d{3})/;
+  for (const block of blocks) {
+    const lines = block.split('\n');
+    const idx = lines.findIndex((l) => l.includes('-->'));
+    if (idx < 0) continue;
+    const m = re.exec(lines[idx]);
+    if (!m) continue;
+    const body = lines
+      .slice(idx + 1)
+      .join('\n')
+      .replace(/<[^>]+>/g, '')
+      .trim();
+    if (!body) continue;
+    cues.push({ start: toSec(m[1], m[2], m[3], m[4]), end: toSec(m[5], m[6], m[7], m[8]), text: body });
+  }
+  return cues.sort((a, b) => a.start - b.start);
+}
+
+/** 按当前播放时间渲染字幕（不依赖 <track>，跨域视频也能显示） */
+function renderCue() {
+  const layer = $('subtitleLayer');
+  if (!layer) return;
+  const cues = state.cues;
+  if (!state.subtitleOn || !cues || cues.length === 0) {
+    layer.classList.remove('show');
+    layer.textContent = '';
+    return;
+  }
+  const t = player.currentTime || 0;
+  const hit = cues.find((c) => t >= c.start && t < c.end);
+  if (!hit) {
+    layer.classList.remove('show');
+    layer.textContent = '';
+    return;
+  }
+  if (layer.textContent !== hit.text) layer.textContent = hit.text;
+  layer.classList.add('show');
+}
+
+async function loadCues(item) {
+  if (state.cuesFor === item.fileId) return;
+  state.cuesFor = item.fileId;
+  state.cues = null;
+  try {
+    const res = await fetch(item.subtitleUrl, { cache: 'force-cache' });
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    const text = await res.text();
+    state.cues = parseVtt(text);
+    if (state.cues.length === 0) setStatus('这一集的字幕是空的');
+    else renderCue();
+  } catch (err) {
+    state.cues = null;
+    setStatus('字幕加载失败：' + err.message);
+  }
+}
+
 function applySubtitle(item) {
-  for (const t of [...player.querySelectorAll('track')]) t.remove();
   const btn = $('subtitleBtn');
+  const layer = $('subtitleLayer');
+  if (layer) {
+    layer.classList.remove('show');
+    layer.textContent = '';
+  }
   if (!btn) return;
   if (!item || !item.subtitleUrl) {
     btn.hidden = true;
     state.subtitleFor = item?.fileId || null;
+    state.cues = null;
+    state.cuesFor = null;
     return;
   }
   btn.hidden = false;
   btn.textContent = state.subtitleOn ? '字幕 开' : '字幕 关';
   btn.classList.toggle('on', state.subtitleOn);
   state.subtitleFor = item.fileId;
-  if (!state.subtitleOn) return;
-
-  const track = document.createElement('track');
-  track.kind = 'subtitles';
-  track.label = item.subtitleKind === 'embedded' ? '内挂字幕' : '外挂字幕';
-  track.srclang = 'zh';
-  track.src = item.subtitleUrl;
-  track.default = true;
-  track.addEventListener('load', () => {
-    const tt = player.textTracks && player.textTracks[0];
-    if (tt) tt.mode = 'showing';
-  });
-  track.addEventListener('error', () => {
-    btn.hidden = true;
-    setStatus('字幕加载失败（这一集可能没有可用字幕）');
-  });
-  player.append(track);
-  // 部分浏览器需要显式把轨道设为显示
-  setTimeout(() => {
-    const tt = player.textTracks && player.textTracks[0];
-    if (tt) tt.mode = 'showing';
-  }, 300);
+  if (state.subtitleOn) loadCues(item);
 }
 
 function hideOverlay() {
@@ -443,6 +491,7 @@ function targetTime(item, nowMs) {
 }
 
 function tick() {
+  renderCue();
   const item = state.now?.now;
   if (!item) return;
   const nowMs = serverNow();
@@ -703,6 +752,9 @@ player.addEventListener('play', () => {
   $('liveTag').style.opacity = '0.92';
 });
 
+player.addEventListener('timeupdate', renderCue);
+player.addEventListener('seeked', renderCue);
+
 player.addEventListener('playing', () => {
   state.switching = false;
 });
@@ -760,6 +812,13 @@ player.addEventListener('error', () => {
 $('subtitleBtn')?.addEventListener('click', () => {
   state.subtitleOn = !state.subtitleOn;
   localStorage.setItem('rotator.subtitles', state.subtitleOn ? '1' : '0');
+  const btn2 = $('subtitleBtn');
+  if (btn2) {
+    btn2.textContent = state.subtitleOn ? '字幕 开' : '字幕 关';
+    btn2.classList.toggle('on', state.subtitleOn);
+  }
+  if (state.subtitleOn && state.now?.now?.subtitleUrl) loadCues(state.now.now);
+  renderCue();
   applySubtitle(state.now?.now);
   setStatus(state.subtitleOn ? '字幕已开启' : '字幕已关闭');
 });
