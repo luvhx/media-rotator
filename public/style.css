@@ -22,6 +22,8 @@ body {
 
 body {
   margin: 0;
+  height: 100dvh;
+  overflow: hidden;
   background: radial-gradient(1200px 600px at 15% -10%, #1b1630 0%, transparent 60%),
     radial-gradient(900px 500px at 100% 0%, #10222a 0%, transparent 55%), var(--bg);
   color: var(--text);
@@ -145,8 +147,26 @@ body {
 }
 
 @media (max-width: 1080px) {
+  body {
+    height: auto;
+    min-height: 100dvh;
+    overflow: visible;
+  }
   .layout {
     grid-template-columns: minmax(0, 1fr);
+    padding: 12px;
+    gap: 12px;
+  }
+  .stage { min-height: 0; }
+  .video-wrap { max-height: none; }
+  /* 单列时节目单独占一块，限高 + 内部滚动，避免被裁掉 */
+  .epg {
+    max-height: 58vh;
+    min-height: 220px;
+  }
+  .epg-list { max-height: none; }
+  .foot {
+    padding-bottom: calc(12px + env(safe-area-inset-bottom, 0px));
   }
 }
 
@@ -155,12 +175,14 @@ body {
   flex-direction: column;
   gap: 14px;
   min-width: 0;
+  min-height: 0;
 }
 
 .video-wrap {
   position: relative;
   width: 100%;
   aspect-ratio: 16 / 9;
+  max-height: calc(100dvh - 320px);
   background: #000;
   border-radius: var(--radius);
   overflow: hidden;
@@ -173,6 +195,7 @@ body {
   height: 100%;
   display: block;
   background: #000;
+  object-fit: contain;
 }
 
 .overlay {
@@ -372,9 +395,9 @@ body {
   margin: 0;
   padding: 6px;
   overflow-y: auto;
-  max-height: calc(100vh - 340px);
-  min-height: 280px;
   flex: 1;
+  min-height: 0;
+  overscroll-behavior: contain;
 }
 
 .epg-item {
