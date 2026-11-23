@@ -480,7 +480,7 @@ async function ensureAssRenderer(item) {
     const assUrl = new URL(`/subtitle/${item.fileId}?format=ass`, location.href).href;
     const assRes = await fetch(assUrl, { cache: 'force-cache' });
     if (!assRes.ok) {
-      setStatus('这一集没有 ASS 源字幕，已改用普通渲染');
+      setStatus('这一集没有 ASS 源字幕，已改用普通渲染', true);
       return false;
     }
     const assText = await assRes.text();
@@ -527,10 +527,12 @@ async function ensureAssRenderer(item) {
     state.assResizeHandler = () => syncAssCanvasSize();
     $('subtitleLayer').classList.remove('show');
     $('subtitleLayer').innerHTML = '';
-    setStatus(fonts.length ? '完整 ASS 渲染已启用' : '完整 ASS 渲染已启用（未找到字体，中文可能不显示）');
+    setStatus(fonts.length ? '完整 ASS 渲染已启用' : '完整 ASS 渲染已启用（未找到字体，中文可能不显示）', true);
     return true;
   } catch (err) {
-    setStatus('完整 ASS 渲染失败：' + err.message);
+    console.error('[jassub]', err);
+    state.lastAssError = String(err && err.stack || err);
+    setStatus('完整 ASS 渲染失败：' + err.message, true);
     canvas.hidden = true;
     state.jassub = null;
     state.assFor = null;
@@ -590,7 +592,7 @@ async function loadCues(item) {
     else renderCue();
   } catch (err) {
     state.cues = null;
-    setStatus('字幕加载失败：' + err.message);
+    setStatus('字幕加载失败：' + err.message, true);
     renderCue();
   }
 }
@@ -882,8 +884,11 @@ function renderEpg() {
   });
 }
 
-function setStatus(text) {
+function setStatus(text, sticky = false) {
+  // 重要提示（错误/回退）在 8 秒内不被常规状态覆盖
+  if (!sticky && state.statusUntil && Date.now() < state.statusUntil) return;
   $('statusText').textContent = text;
+  state.statusUntil = sticky ? Date.now() + 8000 : 0;
 }
 
 function showError(msg) {
