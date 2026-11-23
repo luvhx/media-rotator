@@ -602,3 +602,22 @@ a.ghost.link {
   display: none;
 }
 .subtitle-layer.show { display: block; }
+
+/* 播放器内的字幕开关 */
+.cc-btn {
+  position: absolute;
+  top: 14px;
+  right: 14px;
+  z-index: 7;
+  padding: 6px 12px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.28);
+  background: rgba(0, 0, 0, 0.45);
+  color: #fff;
+  font-size: 12px;
+  letter-spacing: 0.04em;
+  cursor: pointer;
+  backdrop-filter: blur(6px);
+}
+.cc-btn:hover { background: rgba(0, 0, 0, 0.65); }
+.cc-btn.on { border-color: rgba(124, 92, 255, 0.9); background: rgba(124, 92, 255, 0.55); }

@@ -377,7 +377,8 @@ async function loadCues(item) {
   state.cuesFor = item.fileId;
   state.cues = null;
   try {
-    const res = await fetch(item.subtitleUrl, { cache: 'force-cache' });
+    const url = new URL(item.subtitleUrl, typeof location !== 'undefined' ? location.href : 'http://localhost/');
+    const res = await fetch(url, { cache: 'force-cache' });
     if (!res.ok) throw new Error('HTTP ' + res.status);
     const text = await res.text();
     state.cues = parseVtt(text);
@@ -390,7 +391,7 @@ async function loadCues(item) {
 }
 
 function applySubtitle(item) {
-  const btn = $('subtitleBtn');
+  const btn = $('ccBtn');
   const layer = $('subtitleLayer');
   if (layer) {
     layer.classList.remove('show');
@@ -405,7 +406,7 @@ function applySubtitle(item) {
     return;
   }
   btn.hidden = false;
-  btn.textContent = state.subtitleOn ? '字幕 开' : '字幕 关';
+  btn.textContent = state.subtitleOn ? 'CC 开' : 'CC 关';
   btn.classList.toggle('on', state.subtitleOn);
   state.subtitleFor = item.fileId;
   if (state.subtitleOn) loadCues(item);
@@ -809,12 +810,12 @@ player.addEventListener('error', () => {
   showError(`播放失败：${map[code] || '未知错误'}${code ? ` (code ${code})` : ''}${code === 3 || code === 4 ? '　→ 试试底栏「兼容模式」' : ''}`);
 });
 
-$('subtitleBtn')?.addEventListener('click', () => {
+$('ccBtn')?.addEventListener('click', () => {
   state.subtitleOn = !state.subtitleOn;
   localStorage.setItem('rotator.subtitles', state.subtitleOn ? '1' : '0');
-  const btn2 = $('subtitleBtn');
+  const btn2 = $('ccBtn');
   if (btn2) {
-    btn2.textContent = state.subtitleOn ? '字幕 开' : '字幕 关';
+    btn2.textContent = state.subtitleOn ? 'CC 开' : 'CC 关';
     btn2.classList.toggle('on', state.subtitleOn);
   }
   if (state.subtitleOn && state.now?.now?.subtitleUrl) loadCues(state.now.now);
