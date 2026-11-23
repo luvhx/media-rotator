@@ -939,3 +939,15 @@ a.ghost.link {
   .clock .tz { display: none; }
   .badge { font-size: 10px; padding: 2px 6px; }
 }
+
+/* 遮罩内容分两块：开始/错误 与 留空待机 */
+.overlay-inner {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  text-align: center;
+  padding: 20px;
+}
+.overlay-inner[hidden] { display: none; }

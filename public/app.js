@@ -36,6 +36,7 @@ const state = {
       : localStorage.getItem('rotator.sub.ass') === '1',
   jassub: null,
   ignorePauseUntil: 0,
+  wasOff: false,
   assFor: null,
   cues: null,
   cuesFor: null,
@@ -204,8 +205,11 @@ function applyNow(prevFileId) {
 /** 留空时段：停播并显示下一档 */
 function applyOff() {
   const data = state.now;
+  state.wasOff = true;
+  state.userPaused = false;
   if (state.activeFileId) {
     try {
+      state.ignorePauseUntil = Date.now() + 800;
       player.pause();
     } catch {
       /* ignore */
@@ -214,7 +218,13 @@ function applyOff() {
   }
   const overlay = $('overlay');
   overlay.classList.remove('hidden');
-  overlay.innerHTML = '';
+  const startBox = $('startBox');
+  const offBox = $('offBox');
+  if (startBox) startBox.hidden = true;
+  if (offBox) {
+    offBox.hidden = false;
+    offBox.innerHTML = '';
+  }
   const next = data.next?.[0];
   const title = document.createElement('p');
   title.className = 'off-title';
@@ -225,7 +235,7 @@ function applyOff() {
   const tip = document.createElement('p');
   tip.className = 'hint';
   tip.textContent = '节目单按整点 / 半点对齐，空出来的时段留白。';
-  overlay.append(title, when, tip);
+  if (offBox) offBox.append(title, when, tip);
 
   $('seriesName').textContent = '暂停播出';
   $('epLabel').textContent = '';
@@ -271,10 +281,16 @@ function loadItem(item, announce) {
     state.switching = false;
   }, 2000);
 
-  // 已经在播：换源后继续播（保持静音状态）；还没开始：保留「开始收看」按钮
+  // 已经在播：换源后继续播（保持静音状态）；
+  // 从留空时段刚进入节目：自动静音起播（浏览器允许静音自动播放），不用刷新页面
   if (state.started) {
     hideOverlay();
     tryPlay();
+  } else if (state.wasOff) {
+    state.wasOff = false;
+    state.userPaused = false;
+    hideOverlay();
+    autoStartMuted();
   } else {
     showStartOverlay();
   }
@@ -661,12 +677,20 @@ function applySubtitle(item) {
 
 function hideOverlay() {
   $('overlay').classList.add('hidden');
+  const offBox = $('offBox');
+  if (offBox) offBox.hidden = true;
+  const startBox = $('startBox');
+  if (startBox) startBox.hidden = false;
 }
 
 function showStartOverlay(msg) {
   if (state.setup) return;
   const overlay = $('overlay');
   overlay.classList.remove('hidden');
+  const startBox = $('startBox');
+  const offBox = $('offBox');
+  if (offBox) offBox.hidden = true;
+  if (startBox) startBox.hidden = false;
   const btn = $('startBtn');
   if (btn) btn.textContent = msg || '▶ 开始收看';
 }
@@ -921,13 +945,21 @@ function setStatus(text, sticky = false) {
 
 function showError(msg) {
   const el = $('errorText');
-  el.hidden = false;
-  el.textContent = msg;
-  $('overlay').classList.remove('hidden');
+  const startBox = $('startBox');
+  const offBox = $('offBox');
+  if (offBox) offBox.hidden = true;
+  if (startBox) startBox.hidden = false;
+  if (el) {
+    el.hidden = false;
+    el.textContent = msg;
+  }
+  const overlay = $('overlay');
+  if (overlay) overlay.classList.remove('hidden');
 }
 
 function hideError() {
   const el = $('errorText');
+  if (!el) return;
   el.hidden = true;
   el.textContent = '';
 }
@@ -1207,6 +1239,11 @@ player.addEventListener('playing', () => {
 
 player.addEventListener('pause', () => {
   if (player.ended || state.switching) return;
+  // 留空时段的暂停是排期造成的，不能记成「用户暂停」，否则下一档不会自动播
+  if (state.now?.off) {
+    state.userPaused = false;
+    return;
+  }
   // 解除静音时某些浏览器会强制暂停，这类暂停不算用户暂停
   if (state.ignorePauseUntil && Date.now() < state.ignorePauseUntil) {
     state.userPaused = false;
