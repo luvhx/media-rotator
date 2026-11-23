@@ -391,7 +391,7 @@ async function loadCues(item) {
 }
 
 function applySubtitle(item) {
-  const btn = $('ccBtn');
+  const btn = $('subtitleBtn');
   const layer = $('subtitleLayer');
   if (layer) {
     layer.classList.remove('show');
@@ -406,7 +406,7 @@ function applySubtitle(item) {
     return;
   }
   btn.hidden = false;
-  btn.textContent = state.subtitleOn ? 'CC 开' : 'CC 关';
+  btn.textContent = state.subtitleOn ? '字幕 开' : '字幕 关';
   btn.classList.toggle('on', state.subtitleOn);
   state.subtitleFor = item.fileId;
   if (state.subtitleOn) loadCues(item);
@@ -456,7 +456,7 @@ async function autoStartMuted() {
     state.autoplay = 'muted';
     hideOverlay();
     showUnmuteHint();
-    setStatus('静音播放中 · 点击任意处取消静音');
+    setStatus('静音播放中 · 点右上角「取消静音」');
   } catch {
     state.autoplay = 'blocked';
     showStartOverlay('▶ 点击开始（浏览器需要一次点击）');
@@ -768,11 +768,8 @@ player.addEventListener('pause', () => {
 
 player.addEventListener('ended', () => scheduleFetch(0));
 
-// 静音自动播放时，点击页面任意处取消静音
-document.addEventListener('click', (e) => {
-  if (!state.started || !player.muted) return;
-  const tag = (e.target && e.target.tagName) || '';
-  if (tag === 'A' || tag === 'BUTTON') return;
+// 只让「静音提示」这一颗按钮负责取消静音，不劫持播放器原生控件
+$('unmuteHint')?.addEventListener('click', () => {
   player.muted = false;
   hideUnmuteHint();
   setStatus('已取消静音');
@@ -810,12 +807,12 @@ player.addEventListener('error', () => {
   showError(`播放失败：${map[code] || '未知错误'}${code ? ` (code ${code})` : ''}${code === 3 || code === 4 ? '　→ 试试底栏「兼容模式」' : ''}`);
 });
 
-$('ccBtn')?.addEventListener('click', () => {
+$('subtitleBtn')?.addEventListener('click', () => {
   state.subtitleOn = !state.subtitleOn;
   localStorage.setItem('rotator.subtitles', state.subtitleOn ? '1' : '0');
-  const btn2 = $('ccBtn');
+  const btn2 = $('subtitleBtn');
   if (btn2) {
-    btn2.textContent = state.subtitleOn ? 'CC 开' : 'CC 关';
+    btn2.textContent = state.subtitleOn ? '字幕 开' : '字幕 关';
     btn2.classList.toggle('on', state.subtitleOn);
   }
   if (state.subtitleOn && state.now?.now?.subtitleUrl) loadCues(state.now.now);
