@@ -1,6 +1,6 @@
 {
   "name": "media-rotator",
-  "version": "3.6.1",
+  "version": "3.6.2",
   "private": true,
   "description": "WebDAV 媒体库频道轮播：Web UI 配置、多规则编排时间轴、按时间定位视频与进度、302 直链、字幕、TMDB 元数据",
   "type": "module",

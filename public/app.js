@@ -678,6 +678,15 @@ function targetTime(item, nowMs) {
 /** 用户拖动进度 / 双击快进：进入回看状态，暂停自动纠偏 */
 function enterShift() {
   if (!state.started) return;
+  const item = state.now?.now;
+  if (item) {
+    const live = targetTime(item, serverNow());
+    // 偏差很小就不算回看（避免内部 seek / 误触把界面切到回看态）
+    if (Math.abs(player.currentTime - live) < 2.5) {
+      state.shifting = false;
+      return;
+    }
+  }
   state.shifting = true;
   setStatus('回看中 · 点「回到直播」恢复');
 }
@@ -737,6 +746,7 @@ function tick() {
   const liveOffset = targetTime(item, nowMs);
   state.liveOffset = liveOffset;
   const shiftSeconds = player.currentTime - liveOffset;
+  if (state.shifting && Math.abs(shiftSeconds) < 2.5) state.shifting = false;
   state.ui?.update({
     liveOffset,
     shifting: state.shifting,
