@@ -277,6 +277,18 @@ async function renderNowPlaying() {
   }
   try {
     const data = await api(`/api/now?channel=${encodeURIComponent(S.draft.channels[0]?.id || 'main')}`);
+    if (data.off || !data.now) {
+      // 留空时段：显示下一档
+      box.innerHTML = '';
+      const next = (data.next || [])[0];
+      box.append(
+        el('span', { class: 'np-main' },
+          el('div', { class: 'np-title' }, '留空时段（没有节目在播）'),
+          el('div', { class: 'np-sub' }, next ? `下一档 ${next.startText} · ${next.series}` : '暂无后续节目'),
+        ),
+      );
+      return;
+    }
     const n = data.now;
     const poster = S.posters.get(n.seriesId)?.poster;
     box.innerHTML = '';
@@ -1310,8 +1322,15 @@ function openPresets() {
 
 /* ------------------------------ 渲染调度 ------------------------------ */
 
-function switchTab(tab) {
+function switchTab(tab, { updateHash = true } = {}) {
   S.tab = tab;
+  if (updateHash && typeof location !== 'undefined') {
+    try {
+      history.replaceState(null, '', '#' + tab);
+    } catch {
+      /* 忽略 */
+    }
+  }
   for (const b of $$('.tab')) b.classList.toggle('active', b.dataset.tab === tab);
   for (const v of $$('.view')) v.classList.toggle('active', v.dataset.view === tab);
   if (tab === 'series') {
@@ -1414,6 +1433,10 @@ async function boot() {
   });
   renderAll();
   if (S.state.scan.running) pollScan();
+
+  // 支持 #channels / #preview 之类的深链
+  const hashTab = (typeof location !== 'undefined' ? location.hash : '').replace('#', '');
+  if (hashTab && hashTab !== S.tab) switchTab(hashTab);
 }
 
 boot();
