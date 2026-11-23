@@ -165,6 +165,16 @@ if (nowData.off) {
   const expect = nowData.now.offsetMs / 1000;
   log(Math.abs(player.currentTime - expect) < 6, 'seek 位置与后端偏移一致', `期望≈${expect.toFixed(1)}s 实际=${player.currentTime.toFixed(1)}s`);
   log(q('progressFill').style.width?.endsWith('%'), '进度条更新', q('progressFill').style.width);
+  if (nowData.now?.subtitleUrl) {
+    const sb = q('subtitleBtn');
+    const cb = q('ccBtn');
+    log(Boolean(sb) && sb.hidden === false, '页脚字幕按钮可见', sb ? sb.textContent : '(无)');
+    log(Boolean(cb) && cb.hidden === false, '播放器 CC 按钮可见', cb ? cb.textContent : '(无)');
+    // 切换一次，确认不抛错
+    if (cb) cb.dispatch('click');
+    if (cb) cb.dispatch('click');
+    log(true, '字幕开关可点击');
+  }
   log(q('syncText').className.includes('sync'), '同步状态', q('syncText').textContent);
 
   // 桩里的 video 不会自己走时间，漂移累积后 tick 应再次 seek 回直播位置

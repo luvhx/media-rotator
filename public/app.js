@@ -422,6 +422,19 @@ async function loadCues(item) {
   }
 }
 
+/** 同步页脚与播放器内的字幕开关（有字幕才显示） */
+function syncSubtitleButtons(item) {
+  const has = Boolean(item && item.subtitleUrl);
+  for (const id of ['subtitleBtn', 'ccBtn']) {
+    const b = $(id);
+    if (!b) continue;
+    b.hidden = !has;
+    if (!has) continue;
+    b.textContent = id === 'ccBtn' ? (state.subtitleOn ? 'CC 开' : 'CC 关') : state.subtitleOn ? '字幕 开' : '字幕 关';
+    b.classList.toggle('on', state.subtitleOn);
+  }
+}
+
 function applySubtitle(item) {
   const btn = $('subtitleBtn');
   const layer = $('subtitleLayer');
