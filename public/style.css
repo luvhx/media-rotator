@@ -801,6 +801,7 @@ a.ghost.link {
   border-radius: 999px;
   padding: 2px 8px;
 }
+.pu-shift[hidden] { display: none; }
 .pu-live-btn {
   border: 1px solid rgba(255, 255, 255, 0.3);
   background: transparent;
