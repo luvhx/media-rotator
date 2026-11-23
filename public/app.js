@@ -432,15 +432,9 @@ function prefetchNextSubtitle() {
   fetch(next.subtitleUrl).catch(() => {});
 }
 
-function showUnmuteHint() {
-  const hint = $('unmuteHint');
-  if (hint) hint.hidden = false;
-}
-
-function hideUnmuteHint() {
-  const hint = $('unmuteHint');
-  if (hint) hint.hidden = true;
-}
+// 右上角的静音提示已移除：改由播放器自带的音量按钮控制
+function showUnmuteHint() {}
+function hideUnmuteHint() {}
 
 /**
  * 首屏先静音自动播放：浏览器允许静音自动播放，用户点一下即可取消静音。
@@ -456,7 +450,7 @@ async function autoStartMuted() {
     state.autoplay = 'muted';
     hideOverlay();
     showUnmuteHint();
-    setStatus('静音播放中 · 点右上角「取消静音」');
+    setStatus('静音播放中 · 用播放器的音量按钮取消静音');
   } catch {
     state.autoplay = 'blocked';
     showStartOverlay('▶ 点击开始（浏览器需要一次点击）');
@@ -768,12 +762,7 @@ player.addEventListener('pause', () => {
 
 player.addEventListener('ended', () => scheduleFetch(0));
 
-// 只让「静音提示」这一颗按钮负责取消静音，不劫持播放器原生控件
-$('unmuteHint')?.addEventListener('click', () => {
-  player.muted = false;
-  hideUnmuteHint();
-  setStatus('已取消静音');
-});
+// 不再拦截点击：取消静音交给播放器自带的音量按钮
 
 // 调试面板：?debug=1 显示播放器内部状态
 if (new URLSearchParams(location.search).get('debug') === '1') {
