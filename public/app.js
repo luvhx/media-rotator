@@ -468,8 +468,18 @@ function renderCue() {
 
 
 /** 完整 ASS 渲染（libass/wasm）：开启时用画布渲染，关闭时回到 DOM 渲染 */
+/** libass(WASM) 需要 SharedArrayBuffer，而它要求页面跨源隔离（COOP/COEP）。
+ *  视频走 302 到第三方 CDN 时无法开启跨源隔离，所以这里先探测能力。 */
+function libassSupported() {
+  return typeof SharedArrayBuffer !== 'undefined';
+}
+
 async function ensureAssRenderer(item) {
   if (!state.subAss || !item?.subtitleUrl) return false;
+  if (!libassSupported()) {
+    setStatus('当前环境不支持完整 ASS 渲染（需要跨源隔离），已使用普通渲染', true);
+    return false;
+  }
   if (typeof location === 'undefined' || typeof Worker === 'undefined') return false;
   if (state.jassub && state.assFor === item.fileId) return true;
   const canvas = $('assCanvas');
@@ -498,8 +508,8 @@ async function ensureAssRenderer(item) {
     canvas.hidden = false;
     const base = new URL('.', location.href).href;
     const builtinFonts = {
-      'noto sans sc': base + 'vendor/jassub/fonts/noto-sans-sc.woff2',
-      'noto sans jp': base + 'vendor/jassub/fonts/noto-sans-jp.woff2',
+      'noto sans sc': base + 'vendor/jassub/fonts/noto-sans-sc.ttf',
+      'noto sans jp': base + 'vendor/jassub/fonts/noto-sans-jp.ttf',
     };
     const availableFonts = { ...builtinFonts };
     for (const url of fonts) {
@@ -987,6 +997,12 @@ function renderChannels() {
   const enabledEl = $('subEnabled');
   const resetEl = $('subReset');
   const assEl = $('subAss');
+  if (assEl && !libassSupported()) {
+    assEl.disabled = true;
+    assEl.checked = false;
+    const label = assEl.closest('label');
+    if (label) label.title = '需要页面跨源隔离（COOP/COEP）与同源视频（代理模式）才能使用 libass';
+  }
 
   const persist = () => {
     localStorage.setItem('rotator.sub.size', String(state.subSize));
