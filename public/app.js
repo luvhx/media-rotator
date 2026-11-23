@@ -527,7 +527,7 @@ async function ensureAssRenderer(item) {
     state.assResizeHandler = () => syncAssCanvasSize();
     $('subtitleLayer').classList.remove('show');
     $('subtitleLayer').innerHTML = '';
-    setStatus(fonts.length ? '完整 ASS 渲染已启用' : '完整 ASS 渲染已启用（未找到字体，中文可能不显示）', true);
+    setStatus('完整 ASS 渲染已启用（libass）', true);
     return true;
   } catch (err) {
     console.error('[jassub]', err);
